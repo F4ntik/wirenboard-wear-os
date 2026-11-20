@@ -687,7 +687,12 @@ public final class HomeActivity extends Activity {
             flowers.setImageResource(room == null ? R.drawable.blossoms : RoomIcons.forRoom(room.id()).crown());
             flowers.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
             body.addView(flowers, new LinearLayout.LayoutParams(dp(64), dp(15)));
-            header.setTextSize(room != null && room.label().contains("-") ? 17 : 21);
+            boolean longTitle = room != null && title.contains("-");
+            header.setTextSize(longTitle ? 17 : 21);
+            if (longTitle && (width < 200 || getResources().getConfiguration().fontScale > 1.1f)) {
+                header.setText(title.replace("-", "-\n"));
+                header.setContentDescription(title);
+            }
             header.setPadding(0, 0, 0, 0);
             header.setIncludeFontPadding(false);
         }

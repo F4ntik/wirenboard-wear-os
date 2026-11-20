@@ -36,7 +36,7 @@ public final class HomeTile extends TileService {
         var device = request.getDeviceConfiguration();
         float screen = device.getScreenWidthDp();
         boolean showIcons = device.getFontScale() <= 1.15f;
-        float roomWidth = Math.max(TARGET_DP, Math.min(91, screen * 0.37f));
+        float roomWidth = Math.max(TARGET_DP, Math.min(91, screen * (showIcons ? 0.37f : 0.41f)));
         Column.Builder content = new Column.Builder().setHeight(expand())
             .setHorizontalAlignment(HORIZONTAL_ALIGN_CENTER);
         content.addContent(new Spacer.Builder().setHeight(dp(6)).build());
@@ -105,7 +105,8 @@ public final class HomeTile extends TileService {
             content.addContent(new Spacer.Builder().setHeight(dp(2)).build());
         }
         String caption = twoLines ? label.replace("-", "-\n") : label;
-        content.addContent(text(caption, twoLines && showIcons ? 12 : showIcons ? 13 : 14,
+        int labelSize = allRooms ? 14 : showIcons && !twoLines ? 13 : 12;
+        content.addContent(text(caption, labelSize,
             foreground, twoLines || !showIcons ? 2 : 1));
         Modifiers.Builder modifiers = new Modifiers.Builder().setClickable(action)
             .setSemantics(new Semantics.Builder().setContentDescription(label)
