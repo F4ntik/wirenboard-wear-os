@@ -8,7 +8,7 @@ if not exist "%apk%" (
     pause
     exit /b 1
 )
-if not exist "%LOCALAPPDATA%\WirenBoardWear\prepared.dpapi" (
+if not exist "%LOCALAPPDATA%\WirenBoardWearSample\prepared.dpapi" (
     python -X utf8 "%~dp0install_wb_cloud.py" --prepare
     if errorlevel 1 (
         pause

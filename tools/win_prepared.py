@@ -17,7 +17,7 @@ def path():
     directory = Path(os.environ["LOCALAPPDATA"])
     if os.name != "nt" or not directory.is_absolute():
         raise OSError("Windows LocalAppData required")
-    return directory / "WirenBoardWear" / "prepared.dpapi"
+    return directory / "WirenBoardWearSample" / "prepared.dpapi"
 
 
 def dpapi(data, protect):

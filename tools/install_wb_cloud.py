@@ -21,7 +21,8 @@ import warnings
 import win_prepared
 
 API = "https://wirenboard.cloud/api/v1/"
-PACKAGE = "com.galaxywatch.home"
+PACKAGE = "com.galaxywatch.home.sample"
+ACTIVITY = PACKAGE + "/com.galaxywatch.home.HomeActivity"
 BOOTSTRAP = "no_backup/wb-cloud.json"
 ONLINE_PREFIX = "no_backup/wb-cloud-online-"
 
@@ -324,7 +325,7 @@ def send_profile(commands, profile, *, resume=False):
             app_command(commands, f"umask 077 && mkdir -p no_backup && rm -f {temporary}"
                         f" && cat > {temporary} && mv {temporary} {BOOTSTRAP}",
                         payload=json.dumps(profile).encode("utf-8"))
-        adb(commands, "shell", "am", "start", "-W", "-n", PACKAGE + "/.HomeActivity")
+        adb(commands, "shell", "am", "start", "-W", "-n", ACTIVITY)
         deadline = time.monotonic() + 24
         while time.monotonic() < deadline:
             if install_status(commands, profile) == "online":
@@ -354,7 +355,7 @@ def install_prepared(commands, apk):
             install(commands, apk)
         status = install_status(commands, profile)
         if status == "online":
-            adb(commands, "shell", "am", "start", "-W", "-n", PACKAGE + "/.HomeActivity")
+            adb(commands, "shell", "am", "start", "-W", "-n", ACTIVITY)
         else:
             if status == "imported":
                 send_profile(commands, profile, resume=True)

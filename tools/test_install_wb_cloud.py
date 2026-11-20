@@ -39,6 +39,11 @@ class InstallerTest(unittest.TestCase):
         with patch.object(installer.subprocess, "run", return_value=Mock(returncode=0, stdout=b"online")) as run:
             installer.send_profile(["adb", "-s", "watch"], PROFILE)
         commands = run.call_args_list
+        root = Path(__file__).resolve().parents[1]
+        self.assertIn(f"applicationId '{installer.PACKAGE}'", (root / "app/build.gradle").read_text())
+        self.assertIn(["adb", "-s", "watch", "shell", "am", "start", "-W", "-n",
+                       installer.PACKAGE + "/com.galaxywatch.home.HomeActivity"],
+                      [call.args[0] for call in commands])
         profile_write = [call for call in commands if call.kwargs["input"] is not None]
         self.assertEqual(1, len(profile_write))
         self.assertEqual(PROFILE, json.loads(profile_write[0].kwargs["input"]))
