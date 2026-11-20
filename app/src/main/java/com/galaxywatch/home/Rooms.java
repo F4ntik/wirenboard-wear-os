@@ -36,13 +36,15 @@ final class Rooms {
             new Light("Гардероб", "101", "K5", R.drawable.fixture_wardrobe))),
         new Room("hall", "Коридор", List.of(
             new Light("Вход", "101", "K6", R.drawable.fixture_entry),
-            new Light("Коридор", "102", "K1", R.drawable.fixture_track),
-            new Light("Зеркало", "102", "K2", R.drawable.fixture_mirror),
-            new Light("Душевая", "102", "K3", R.drawable.fixture_shower))),
+            new Light("Коридор", "102", "K1", R.drawable.fixture_track))),
         new Room("kids", "Детская", List.of(
             new Light("Основной", "102", "K5", R.drawable.fixture_pendant))),
         new Room("office", "Кабинет", List.of(
-            new Light("Основной", "102", "K6", R.drawable.fixture_pendant)))
+            new Light("Основной", "102", "K6", R.drawable.fixture_pendant))),
+        new Room("wc", "Санузел", List.of(
+            new Light("Основной", "102", "K2", R.drawable.fixture_mirror))),
+        new Room("shower", "Душевая", List.of(
+            new Light("Основной", "102", "K3", R.drawable.fixture_shower)))
     );
 
     static final List<Light> MASTER_LIGHTS = masterLights();

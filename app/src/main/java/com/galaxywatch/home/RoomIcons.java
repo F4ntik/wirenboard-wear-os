@@ -9,6 +9,8 @@ record RoomIcons(int icon, int crown, int surface) {
             case "hall" -> new RoomIcons(R.drawable.ic_room_hall, R.drawable.crown_hall, 0xFF393C33);
             case "kids" -> new RoomIcons(R.drawable.ic_room_kids, R.drawable.crown_kids, 0xFF44363E);
             case "office" -> new RoomIcons(R.drawable.ic_room_office, R.drawable.crown_office, 0xFF2D3B41);
+            case "wc" -> new RoomIcons(R.drawable.ic_room_wc, R.drawable.crown_lavender, 0xFF3B333E);
+            case "shower" -> new RoomIcons(R.drawable.ic_room_shower, R.drawable.crown_lily, 0xFF2D3C3E);
             default -> new RoomIcons(R.drawable.ic_room_grid, R.drawable.blossoms, 0xFF302631);
         };
     }

@@ -41,14 +41,24 @@ public class RoomsTest {
         assertEquals(3, group.lights().stream().map(Rooms.Light::stateTopic).distinct().count());
     }
 
-    @Test public void hallwayMatchesTheSampleMapping() {
-        Map<String, String> expected = Map.of(
-            "Вход", "101/K6", "Коридор", "102/K1", "Зеркало", "102/K2", "Душевая", "102/K3");
+    @Test public void hallwayOffTargetsOnlyItsTwoOutputs() {
+        Map<String, String> expected = Map.of("Вход", "101/K6", "Коридор", "102/K1");
         Rooms.Room hallway = Rooms.find("hall");
-        assertEquals(expected.size(), hallway.lights().size());
+        assertEquals(2, hallway.lights().size());
         for (Rooms.Light light : hallway.lights()) {
             assertEquals(expected.get(light.label()), light.relay() + "/" + light.channel());
         }
+    }
+
+    @Test public void bathroomAndShowerHaveIndependentOutputs() {
+        Rooms.Room bathroom = Rooms.find("wc");
+        assertEquals("Санузел", bathroom.label());
+        assertEquals(1, bathroom.lights().size());
+        assertEquals("/devices/wb-mr6c_102/controls/K2", bathroom.lights().get(0).stateTopic());
+        Rooms.Room shower = Rooms.find("shower");
+        assertEquals("Душевая", shower.label());
+        assertEquals(1, shower.lights().size());
+        assertEquals("/devices/wb-mr6c_102/controls/K3", shower.lights().get(0).stateTopic());
     }
 
     @Test public void masterOffTracksEveryRelayInTheExistingRule() {
