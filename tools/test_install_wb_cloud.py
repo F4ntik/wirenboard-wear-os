@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import install_wb_cloud as installer
 import win_prepared
@@ -64,6 +64,28 @@ class InstallerTest(unittest.TestCase):
             with self.assertRaises(installer.SetupError):
                 installer.choose_controller(object(), "example-access", None)
         get.assert_called_once()
+
+    def test_authentication_maps_provider_2fa_error_without_showing_values(self):
+        response = MagicMock(code=401)
+        response.__enter__.return_value = response
+        response.read.return_value = b'{"detail":"Need TOTP for example-password"}'
+        with patch.object(installer, "exchange", return_value=response) as exchange:
+            with self.assertRaisesRegex(installer.SetupError, "актуальный код двухфакторной защиты") as rejected:
+                installer.authenticate(object(), " example@example.test ", "example-password")
+        self.assertNotIn("example-password", str(rejected.exception))
+        self.assertEqual(installer.API + "auth/token/", exchange.call_args.args[1])
+        self.assertEqual("example@example.test", exchange.call_args.kwargs["body"]["email"])
+
+    def test_controller_choice_can_use_dialog(self):
+        rows = [{"serialNumber": "SERIAL01"}, {"serialNumber": "SERIAL02"}]
+        with patch.object(installer, "document", return_value=rows):
+            self.assertEqual("SERIAL02", installer.choose_controller(object(), "example-access", None, lambda _rows: 2))
+
+    def test_missing_putty_session_can_prompt_in_window(self):
+        with (patch.object(installer, "putty_pairing_code", return_value=None),
+              patch.object(installer.getpass, "getpass") as console):
+            self.assertEqual("01234567", installer.pairing_code("192.0.2.1", lambda: " 01234567 "))
+        console.assert_not_called()
 
     def test_private_gateway_401_with_expected_body_requires_service_cookie(self):
         response = Mock(code=401)

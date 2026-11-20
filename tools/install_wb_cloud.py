@@ -106,7 +106,7 @@ def open_service(transport, origin, signed_link, cookie_jar):
     raise SetupError("WB Cloud не завершил подключение к сервису")
 
 
-def choose_controller(opener, access, preferred):
+def choose_controller(opener, access, preferred, prompt=None):
     url = API + "controllers/"
     serials = []
     for _ in range(100):
@@ -131,6 +131,11 @@ def choose_controller(opener, access, preferred):
         raise SetupError("В аккаунте нет подключённых контроллеров")
     if len(serials) == 1:
         return serials[0]
+    if prompt is not None:
+        index = prompt(serials)
+        if index is None:
+            raise SetupError("Подготовка отменена")
+        return serials[index - 1]
     for index, serial in enumerate(serials, start=1):
         print(f"{index}. {serial}")
     choice = input("Номер домашнего контроллера: ").strip()
@@ -145,20 +150,44 @@ def valid_jwt(value):
     )
 
 
-def login(opener):
-    email = input("Email аккаунта WB Cloud: ").strip()
-    secret = getpass.getpass("Пароль WB Cloud: ")
-    code = getpass.getpass("Код из приложения 2FA, если включена двухфакторная защита: ").strip()
+def authenticate(opener, email, password, code=""):
+    email = email.strip()
+    code = code.strip()
+    if not email or not password:
+        raise SetupError("Введите почту и пароль WB Cloud")
     if code and not re.fullmatch(r"[0-9]{6}", code):
         raise SetupError("Код двухфакторной защиты должен содержать 6 цифр")
-    credentials = {"email": email, "password": secret}
+    credentials = {"email": email, "password": password}
     if code:
         credentials["totpCode"] = code
-    tokens = document(opener, API + "auth/token/", "WB Cloud не принял данные для входа", body=credentials)
+    with exchange(opener, API + "auth/token/", body=credentials) as response:
+        data = response.read(16385)
+        try:
+            tokens = json.loads(data) if len(data) <= 16384 else None
+        except (ValueError, UnicodeError):
+            tokens = None
+        if not isinstance(tokens, dict):
+            tokens = {}
+        if response.code != 200:
+            provider = f"{tokens.get('code', '')} {tokens.get('detail', '')}".lower()
+            if response.code == 429:
+                raise SetupError("WB Cloud ограничил число попыток входа. Повторите позже")
+            if "totpCode" in tokens or any(word in provider for word in ("totp", "two-factor", "two_factor", "mfa")):
+                raise SetupError("WB Cloud запрашивает актуальный код двухфакторной защиты")
+            if response.code == 401:
+                raise SetupError("WB Cloud не принял данные входа. Проверьте почту, пароль и код 2FA")
+            raise SetupError(f"WB Cloud отклонил вход (HTTP {response.code})")
     refresh = tokens.get("refresh")
     if not valid_jwt(refresh):
         raise SetupError("WB Cloud не выдал сессию для часов")
     return refresh
+
+
+def login(opener):
+    email = input("Email аккаунта WB Cloud: ")
+    password = getpass.getpass("Пароль WB Cloud: ")
+    code = getpass.getpass("Код из приложения 2FA, если включена двухфакторная защита: ")
+    return authenticate(opener, email, password, code)
 
 
 def putty_pairing_code(address):
@@ -191,12 +220,18 @@ def putty_pairing_code(address):
     return output.decode("ascii") if result.returncode == 0 and re.fullmatch(rb"[0-9]{8}", output) else None
 
 
-def pairing_code(address):
+def pairing_code(address, prompt=None):
     code = putty_pairing_code(address) if address else None
     if code is None:
-        if address:
-            print("Общая сессия PuTTY недоступна. Можно ввести код вручную.")
-        code = getpass.getpass("Восьмизначный код привязки со шлюза: ").strip()
+        if prompt is not None:
+            code = prompt()
+            if code is None:
+                raise SetupError("Подготовка отменена")
+        else:
+            if address:
+                print("Общая сессия PuTTY недоступна. Можно ввести код вручную.")
+            code = getpass.getpass("Восьмизначный код привязки со шлюза: ")
+        code = code.strip()
     if not re.fullmatch(r"[0-9]{8}", code):
         raise SetupError("Введите 8 цифр с контроллера")
     return code
@@ -333,14 +368,14 @@ def install_prepared(commands, apk):
         app_command(commands, f"rm -f {ONLINE_PREFIX}{identifier}", check=False)
 
 
-def prepare_profile(args, login_prompt=None):
+def prepare_profile(args, login_prompt=None, *, controller_prompt=None, pair_prompt=None):
     refresh = (login_prompt or login)(client())
     cloud = client()
     renewed = document(cloud, API + "auth/token/refresh/", "WB Cloud не продлил доступ", body={"refresh": refresh})
     access, refresh = renewed.get("access"), renewed.get("refresh", refresh)
     if not valid_jwt(access) or not valid_jwt(refresh):
         raise SetupError("WB Cloud не выдал сессию для часов")
-    serial = choose_controller(cloud, access, args.controller)
+    serial = choose_controller(cloud, access, args.controller, controller_prompt)
     controller_api = f"{API}controllers/{serial}/"
     services = document(cloud, controller_api + "services/", "Список сервисов контроллера недоступен", bearer=access)
     services = services if isinstance(services, list) else services["results"]
@@ -353,7 +388,7 @@ def prepare_profile(args, login_prompt=None):
     service = client(cookies)
     origin = f"https://{serial.lower()}-{args.port}.apps.wirenboard.cloud"
     open_service(service, origin, link, cookies)
-    code = pairing_code(args.pair_with_putty)
+    code = pairing_code(args.pair_with_putty, pair_prompt)
     key = document(service, origin + "/v1/pair", "Шлюз не принял код привязки", body={"code": code})["token"]
     if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", key):
         raise SetupError("Шлюз вернул неверный ключ")
@@ -363,12 +398,39 @@ def prepare_profile(args, login_prompt=None):
     return {"serial": serial, "port": args.port, "refresh": refresh, "gatewayKey": key, "installId": uuid.uuid4().hex}
 
 
-def save_prepared(args, login_prompt=None, *, replace=False):
+def save_prepared(args, login_prompt=None, *, replace=False, controller_prompt=None, pair_prompt=None):
     prepared = win_prepared.path()
     with win_prepared.lock(prepared):
         if prepared.is_file() and not replace:
             raise SetupError("Доступ уже сохранён на этом ПК")
-        win_prepared.write(prepared, {"profile": prepare_profile(args, login_prompt), "watch": None})
+        profile = prepare_profile(args, login_prompt, controller_prompt=controller_prompt, pair_prompt=pair_prompt)
+        win_prepared.write(prepared, {"profile": profile, "watch": None})
+
+
+def prepare_desktop(args):
+    from prepare_wb_cloud import prepare_window
+
+    if not args.replace_prepared and win_prepared.path().is_file():
+        raise SetupError("Доступ уже сохранён на этом ПК")
+
+    def prepare(email, password, otp, address, controller_prompt, pair_prompt):
+        try:
+            args.pair_with_putty = ipaddress.IPv4Address(address) if address else None
+            if args.pair_with_putty and (not args.pair_with_putty.is_private or args.pair_with_putty.is_unspecified):
+                raise ValueError()
+        except ValueError:
+            return "Введите локальный IPv4-адрес контроллера или оставьте поле пустым"
+        try:
+            save_prepared(args, lambda opener: authenticate(opener, email, password, otp),
+                          replace=args.replace_prepared, controller_prompt=controller_prompt, pair_prompt=pair_prompt)
+        except SetupError as error:
+            return str(error)
+        except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
+            return "Не удалось подготовить доступ. Проверьте связь с WB Cloud и домашним контроллером"
+        return None
+
+    if not prepare_window(prepare, str(args.pair_with_putty or "")):
+        raise SetupError("Подготовка отменена")
 
 
 def main():
@@ -395,7 +457,7 @@ def main():
 
     warnings.simplefilter("error", getpass.GetPassWarning)
     if args.prepare:
-        save_prepared(args, replace=args.replace_prepared)
+        prepare_desktop(args)
         print("Доступ подготовлен для этого пользователя Windows. Часы можно подключить позже.")
         return
 

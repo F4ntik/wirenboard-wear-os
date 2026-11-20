@@ -8,11 +8,14 @@ if not exist "%apk%" (
     pause
     exit /b 1
 )
-if exist "%LOCALAPPDATA%\WirenBoardWear\prepared.dpapi" (
-    python -X utf8 "%~dp0install_wb_cloud.py" "%apk%" --install-prepared
-) else (
-    python -X utf8 "%~dp0install_wb_cloud.py" "%apk%"
+if not exist "%LOCALAPPDATA%\WirenBoardWear\prepared.dpapi" (
+    python -X utf8 "%~dp0install_wb_cloud.py" --prepare
+    if errorlevel 1 (
+        pause
+        exit /b 1
+    )
 )
+python -X utf8 "%~dp0install_wb_cloud.py" "%apk%" --install-prepared
 set "result=%errorlevel%"
 pause
 exit /b %result%
