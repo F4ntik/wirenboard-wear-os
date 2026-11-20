@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="light_state_on">Включён</string>
+    <string name="light_state_off">Выключен</string>
+    <string name="light_state_pending">Ожидает подтверждения</string>
+    <string name="light_state_unknown">Состояние неизвестно</string>
+</resources>

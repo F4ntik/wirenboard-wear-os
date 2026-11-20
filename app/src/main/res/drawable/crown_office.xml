@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="64dp" android:height="18dp" android:viewportWidth="64" android:viewportHeight="18">
+    <path android:strokeColor="#A2AA91" android:strokeWidth="1.05" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M4,16Q29,12 59,3" />
+    <group android:translateX="12" android:translateY="14" android:scaleX="0.8" android:scaleY="0.8" android:rotation="-130">
+        <path android:fillColor="#ADC5BB" android:pathData="M0,0C-1,-5 2,-8 6,-7C11,-5 9,2 4,2Q1,2 0,0Z" />
+    </group>
+    <group android:translateX="20" android:translateY="12" android:scaleX="1" android:scaleY="1" android:rotation="35">
+        <path android:fillColor="#9ABBB3" android:pathData="M0,0C-1,-5 2,-8 6,-7C11,-5 9,2 4,2Q1,2 0,0Z" />
+    </group>
+    <group android:translateX="28" android:translateY="10" android:scaleX="1" android:scaleY="1" android:rotation="-108">
+        <path android:fillColor="#ADC5BB" android:pathData="M0,0C-1,-5 2,-8 6,-7C11,-5 9,2 4,2Q1,2 0,0Z" />
+    </group>
+    <group android:translateX="36" android:translateY="9" android:scaleX="1" android:scaleY="1" android:rotation="30">
+        <path android:fillColor="#9ABBB3" android:pathData="M0,0C-1,-5 2,-8 6,-7C11,-5 9,2 4,2Q1,2 0,0Z" />
+    </group>
+    <group android:translateX="44" android:translateY="7" android:scaleX="0.9" android:scaleY="0.9" android:rotation="-112">
+        <path android:fillColor="#ADC5BB" android:pathData="M0,0C-1,-5 2,-8 6,-7C11,-5 9,2 4,2Q1,2 0,0Z" />
+    </group>
+    <group android:translateX="52" android:translateY="5" android:scaleX="0.7" android:scaleY="0.7" android:rotation="25">
+        <path android:fillColor="#9ABBB3" android:pathData="M0,0C-1,-5 2,-8 6,-7C11,-5 9,2 4,2Q1,2 0,0Z" />
+    </group>
+</vector>

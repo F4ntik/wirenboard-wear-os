@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="64dp" android:height="18dp" android:viewportWidth="64" android:viewportHeight="18">
+    <path android:strokeColor="#A2AA91" android:strokeWidth="1.05" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M4,14Q18,16 30,10T59,6" />
+    <group android:translateX="11" android:translateY="14" android:scaleX="1.15" android:scaleY="1.15" android:rotation="-120">
+        <path android:fillColor="#A3AF96" android:pathData="M0,0Q1,-5 8,-4Q7,1 0,0Z" />
+    </group>
+    <group android:translateX="17" android:translateY="13" android:scaleX="1.15" android:scaleY="1.15" android:rotation="23">
+        <path android:fillColor="#AEB89E" android:pathData="M0,0Q1,-5 8,-4Q7,1 0,0Z" />
+    </group>
+    <group android:translateX="39" android:translateY="8" android:scaleX="1.2" android:scaleY="1.2" android:rotation="-105">
+        <path android:fillColor="#9CAB93" android:pathData="M0,0Q1,-5 8,-4Q7,1 0,0Z" />
+    </group>
+    <group android:translateX="48" android:translateY="7" android:scaleX="1.2" android:scaleY="1.2" android:rotation="25">
+        <path android:fillColor="#B0B9A1" android:pathData="M0,0Q1,-5 8,-4Q7,1 0,0Z" />
+    </group>
+    <group android:translateX="30" android:translateY="8" android:scaleX="1" android:scaleY="1" android:rotation="0">
+        <path android:fillColor="#D58CA0" android:pathData="M-7,-2Q-7,-6 -3,-6Q-1,-9 2,-6Q6,-7 6,-3Q10,0 6,3Q5,7 1,6Q-4,8 -6,4Q-9,1 -7,-2Z" />
+        <path android:fillColor="#F1BAC4" android:pathData="M-5,-2Q-3,-5 0,-3Q4,-5 4,-2Q6,0 3,2Q1,5 -2,3Q-5,3 -5,-2Z" />
+        <path android:strokeColor="#C88295" android:strokeWidth="0.9" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M-2,-1Q0,-3 2,-1Q3,1 0,2" />
+    </group>
+    <group android:translateX="54" android:translateY="6" android:scaleX="0.8" android:scaleY="0.8" android:rotation="-15">
+        <path android:fillColor="#EEC986" android:pathData="M-4,0Q-2,-4 2,-2Q5,0 4,2Q0,5 -4,0Z" />
+    </group>
+</vector>

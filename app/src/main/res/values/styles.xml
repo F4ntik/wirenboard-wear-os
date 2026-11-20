@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="HomeTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowBackground">#171118</item>
+        <item name="android:colorAccent">#F2B9CF</item>
+        <!-- The page handles the gesture because the room and home share one activity. -->
+        <item name="android:windowSwipeToDismiss">false</item>
+    </style>
+</resources>
