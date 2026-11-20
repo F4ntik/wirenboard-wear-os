@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "type": "object",
+  "title": "Wear OS light gateway",
+  "description": "Access to lighting from Wear OS watches",
+  "configFile": {
+    "path": "/etc/wb-wear-light-gateway.conf",
+    "service": "wb-wear-light-gateway"
+  },
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "title": "Enable gateway",
+      "default": false,
+      "_format": "checkbox"
+    }
+  },
+  "required": ["enabled"],
+  "additionalProperties": false,
+  "translations": {
+    "ru": {
+      "Wear OS light gateway": "Шлюз освещения Wear OS",
+      "Access to lighting from Wear OS watches": "Доступ к освещению с часов Wear OS",
+      "Enable gateway": "Включить шлюз"
+    }
+  }
+}

@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+if [ "$1" = configure ]; then
+    state=/var/lib/wb-wear-light-gateway
+    install -d -m 0700 -o root -g root "$state"
+    if [ ! -s "$state/token.env" ]; then
+        token_file=$(mktemp "$state/token.XXXXXXXX")
+        trap 'rm -f "$token_file"' EXIT
+        python3 -c 'import secrets; print("WB_GATEWAY_TOKEN=" + secrets.token_urlsafe(32))' > "$token_file"
+        mv -fT "$token_file" "$state/token.env"
+    fi
+fi
+
+#DEBHELPER#

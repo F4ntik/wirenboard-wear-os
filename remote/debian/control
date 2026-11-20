@@ -1,0 +1,17 @@
+Source: wb-wear-light-gateway
+Section: net
+Priority: optional
+Maintainer: F4ntik <F4ntik@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.0
+Rules-Requires-Root: no
+Homepage: https://github.com/F4ntik/wirenboard-wear-os
+
+Package: wb-wear-light-gateway
+Architecture: all
+Depends: ${misc:Depends}, python3 (>= 3.9), python3-paho-mqtt, systemd (>= 247)
+Recommends: wb-mqtt-confed
+Description: local HTTP gateway for the Wiren Board Wear OS light remote
+ Bridges authenticated requests from a Wear OS remote to configured
+ lighting controls in the local MQTT broker. Provides an on/off switch
+ in the Wiren Board configuration editor.

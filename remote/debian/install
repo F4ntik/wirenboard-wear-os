@@ -1,0 +1,4 @@
+gateway.py usr/lib/wb-wear-light-gateway/
+debian/wb-wear-light-gateway.conf etc/
+debian/wb-wear-light-gateway.schema.json usr/share/wb-mqtt-confed/schemas/
+debian/wb-wear-light-gateway-navigation.json usr/share/wb-mqtt-homeui/custom-menu/

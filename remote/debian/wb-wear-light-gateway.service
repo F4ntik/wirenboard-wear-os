@@ -1,0 +1,18 @@
+[Unit]
+Description=Wiren Board Wear OS light gateway
+After=mosquitto.service
+
+[Service]
+Type=exec
+DynamicUser=yes
+EnvironmentFile=/var/lib/wb-wear-light-gateway/token.env
+RuntimeDirectory=wb-wear-light-gateway
+RuntimeDirectoryMode=0700
+UMask=0077
+ExecStart=/usr/bin/python3 /usr/lib/wb-wear-light-gateway/gateway.py --switch-config /etc/wb-wear-light-gateway.conf --pair-code-file /run/wb-wear-light-gateway/pair-code
+Restart=on-failure
+RestartPreventExitStatus=2
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

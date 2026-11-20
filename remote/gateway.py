@@ -8,9 +8,11 @@ import json
 import os
 import re
 import secrets
+import signal
 import socket
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from threading import BoundedSemaphore, Condition, Lock, Timer
 
 from paho.mqtt import client as mqtt
@@ -108,23 +110,23 @@ class Controller:
         self.updates = dict.fromkeys(LIGHTS, 0)
         self.changed.notify_all()
 
-    def on_connect(self, client, _data, _flags, reason, _properties):
+    def on_connect(self, client, _data, _flags, reason, _properties=None):
         with self.changed:
             self.reset()
-            if not reason.is_failure:
+            if reason == 0:
                 result, message_id = client.subscribe(SUBSCRIPTIONS)
                 if result == mqtt.MQTT_ERR_SUCCESS:
                     self.subscription = message_id
 
-    def on_disconnect(self, _client, _data, _flags, _reason, _properties):
+    def on_disconnect(self, _client, _data, *_details):
         with self.changed:
             self.reset()
 
-    def on_subscribe(self, _client, _data, message_id, reasons, _properties):
+    def on_subscribe(self, _client, _data, message_id, reasons, _properties=None):
         with self.changed:
             if message_id == self.subscription:
-                self.ready = len(reasons) == len(SUBSCRIPTIONS) and not any(
-                    reason.is_failure for reason in reasons)
+                self.ready = len(reasons) == len(SUBSCRIPTIONS) and all(
+                    reason in (0, 1, 2) for reason in reasons)
 
     def on_message(self, _client, _data, message):
         value = {b"0": False, b"1": True}.get(message.payload)
@@ -351,10 +353,23 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--pair-once", action="store_true", help="выдать одноразовый код для часов")
+    parser.add_argument("--switch-config", type=Path, help="файл настроек конфигуратора Wiren Board")
+    parser.add_argument("--pair-code-file", type=Path, help="файл кода, выдаваемого по сигналу SIGUSR1")
     args = parser.parse_args()
+    if args.switch_config:
+        try:
+            settings = json.loads(args.switch_config.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            parser.error("cannot read gateway configuration")
+        if not isinstance(settings, dict) or type(settings.get("enabled")) is not bool:
+            parser.error("gateway configuration requires a boolean enabled setting")
+        if not settings["enabled"]:
+            return
+    if args.pair_code_file and not hasattr(signal, "SIGUSR1"):
+        parser.error("--pair-code-file requires SIGUSR1")
     key = os.environ.get("WB_GATEWAY_TOKEN", "")
     if re.fullmatch(r"[A-Za-z0-9_-]{32,128}", key) is None:
-        parser.error("WB_GATEWAY_TOKEN must be a randomly generated base64url token (32–128 characters)")
+        parser.error("gateway token must be a randomly generated base64url token (32–128 characters)")
     username = os.environ.get("WB_MQTT_USERNAME")
     password = os.environ.get("WB_MQTT_PASSWORD")
     if password is not None and not username:
@@ -367,16 +382,28 @@ def main():
     except ValueError:
         parser.error("MQTT and HTTP port numbers must be integers between 1 and 65535")
 
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, clean_session=True)
+    if hasattr(mqtt, "CallbackAPIVersion"):
+        client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, clean_session=True)
+    else:
+        client = mqtt.Client(clean_session=True)
     if username:
         client.username_pw_set(username, password)
     controller = Controller(client)
     client.connect_async(host, port, keepalive=10)
-    pairing = Pairing(f"{secrets.randbelow(100_000_000):08d}") if args.pair_once else None
-    with Gateway(args.port, controller, key, pairing=pairing) as server:
+    with Gateway(args.port, controller, key) as server:
+        def issue_code(*_signal):
+            pairing = Pairing(f"{secrets.randbelow(100_000_000):08d}")
+            if args.pair_code_file:
+                args.pair_code_file.write_text(pairing.code + "\n", encoding="ascii")
+            else:
+                print(f"Код для часов (5 минут): {pairing.code}", flush=True)
+            server.pairing = pairing
+
+        if args.pair_code_file:
+            signal.signal(signal.SIGUSR1, issue_code)
+        if args.pair_once:
+            issue_code()
         client.loop_start()
-        if pairing is not None:
-            print(f"Код для часов (5 минут): {pairing.code}", flush=True)
         try:
             server.serve_forever()
         except KeyboardInterrupt:

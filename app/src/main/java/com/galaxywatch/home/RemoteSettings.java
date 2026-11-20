@@ -49,15 +49,7 @@ final class RemoteSettings {
 
     static Config load(SharedPreferences settings) throws GeneralSecurityException, IOException {
         String server = origin(settings.getString(ORIGIN, ""));
-        String[] encoded = settings.getString(TOKEN, "").split("\\.", -1);
-        if (encoded.length != 2) throw new IllegalArgumentException();
-        KeyStore keys = keyStore();
-        SecretKey key = (SecretKey) keys.getKey(KEY_ALIAS, null);
-        if (key == null) throw new GeneralSecurityException();
-        Cipher cipher = Cipher.getInstance(AES_GCM);
-        cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(128, decode(encoded[0])));
-        cipher.updateAAD(server.getBytes(StandardCharsets.UTF_8));
-        String token = new String(cipher.doFinal(decode(encoded[1])), StandardCharsets.UTF_8);
+        String token = unseal(server, settings.getString(TOKEN, ""));
         if (!validToken(token)) throw new GeneralSecurityException();
         return new Config(server, token);
     }
@@ -65,6 +57,23 @@ final class RemoteSettings {
     static void save(SharedPreferences settings, String server, String token)
         throws GeneralSecurityException, IOException {
         if (!validToken(token)) throw new IllegalArgumentException();
+        settings.edit().putString(ORIGIN, server).putString(TOKEN, seal(server, token)).apply();
+    }
+
+    static String unseal(String purpose, String value) throws GeneralSecurityException, IOException {
+        String[] encoded = value.split("\\.", -1);
+        if (encoded.length != 2) throw new IllegalArgumentException();
+        KeyStore keys = keyStore();
+        SecretKey key = (SecretKey) keys.getKey(KEY_ALIAS, null);
+        if (key == null) throw new GeneralSecurityException();
+        Cipher cipher = Cipher.getInstance(AES_GCM);
+        cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(128, decode(encoded[0])));
+        cipher.updateAAD(purpose.getBytes(StandardCharsets.UTF_8));
+        return new String(cipher.doFinal(decode(encoded[1])), StandardCharsets.UTF_8);
+    }
+
+    static synchronized String seal(String purpose, String value)
+        throws GeneralSecurityException, IOException {
         KeyStore keys = keyStore();
         SecretKey key = (SecretKey) keys.getKey(KEY_ALIAS, null);
         if (key == null) {
@@ -77,9 +86,8 @@ final class RemoteSettings {
         }
         Cipher cipher = Cipher.getInstance(AES_GCM);
         cipher.init(Cipher.ENCRYPT_MODE, key);
-        cipher.updateAAD(server.getBytes(StandardCharsets.UTF_8));
-        String encrypted = encode(cipher.getIV()) + "." + encode(cipher.doFinal(token.getBytes(StandardCharsets.UTF_8)));
-        settings.edit().putString(ORIGIN, server).putString(TOKEN, encrypted).apply();
+        cipher.updateAAD(purpose.getBytes(StandardCharsets.UTF_8));
+        return encode(cipher.getIV()) + "." + encode(cipher.doFinal(value.getBytes(StandardCharsets.UTF_8)));
     }
 
     private static KeyStore keyStore() throws GeneralSecurityException, IOException {

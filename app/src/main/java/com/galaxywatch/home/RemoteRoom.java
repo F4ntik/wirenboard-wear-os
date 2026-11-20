@@ -31,6 +31,7 @@ final class RemoteRoom implements HomeLink {
     }
 
     private final RemoteSettings.Config config;
+    private final WbCloud cloud;
     private final List<Rooms.Light> lights;
     private final Events events;
     private final ScheduledExecutorService requests = Executors.newSingleThreadScheduledExecutor();
@@ -39,7 +40,16 @@ final class RemoteRoom implements HomeLink {
     private volatile HttpsURLConnection inFlight;
 
     RemoteRoom(RemoteSettings.Config config, List<Rooms.Light> lights, Events events) {
+        this(config, null, lights, events);
+    }
+
+    RemoteRoom(WbCloud cloud, List<Rooms.Light> lights, Events events) {
+        this(null, cloud, lights, events);
+    }
+
+    private RemoteRoom(RemoteSettings.Config config, WbCloud cloud, List<Rooms.Light> lights, Events events) {
         this.config = config;
+        this.cloud = cloud;
         this.lights = lights;
         this.events = events;
     }
@@ -108,16 +118,31 @@ final class RemoteRoom implements HomeLink {
     }
 
     private Snapshot request(String path, JSONObject body) throws IOException, JSONException {
-        HttpsURLConnection request = open(config.origin(), path);
+        try {
+            return exchangeSnapshot(path, body);
+        } catch (WbCloud.RejectedTunnel expired) {
+            if (body != null || closed) throw expired;
+            try {
+                return exchangeSnapshot(path, null);
+            } catch (WbCloud.RejectedTunnel rejected) {
+                throw new WbCloud.LoginRequired();
+            }
+        }
+    }
+
+    private Snapshot exchangeSnapshot(String path, JSONObject body) throws IOException, JSONException {
+        HttpsURLConnection request = cloud == null ? open(config.origin(), path) : cloud.open(path, body == null);
         inFlight = request;
         try {
             if (closed) throw new IOException();
-            request.setRequestProperty("Authorization", "Bearer " + config.token());
+            request.setRequestProperty("Authorization", "Bearer " + (cloud == null ? config.token() : cloud.gatewayKey()));
             JSONObject json = exchange(request, body);
             JSONObject values = json.getJSONObject("lights");
             Map<Rooms.Light, Boolean> states = new HashMap<>();
             for (Rooms.Light light : lights) states.put(light, binary(values.get(key(light))));
             return new Snapshot(binary(json.get("vacation")), states);
+        } catch (HttpFailure failure) {
+            throw cloud == null ? failure : cloud.gatewayRejected(failure);
         } finally {
             inFlight = null;
             request.disconnect();
@@ -133,7 +158,7 @@ final class RemoteRoom implements HomeLink {
         }
     }
 
-    private static HttpsURLConnection open(String origin, String path) throws IOException {
+    static HttpsURLConnection open(String origin, String path) throws IOException {
         HttpsURLConnection request = (HttpsURLConnection) URI.create(origin + path).toURL().openConnection();
         request.setInstanceFollowRedirects(false);
         request.setUseCaches(false);
@@ -143,7 +168,7 @@ final class RemoteRoom implements HomeLink {
         return request;
     }
 
-    private static JSONObject exchange(HttpsURLConnection request, JSONObject body) throws IOException, JSONException {
+    static JSONObject exchange(HttpsURLConnection request, JSONObject body) throws IOException, JSONException {
         if (body != null) {
             byte[] json = body.toString().getBytes(StandardCharsets.UTF_8);
             request.setRequestMethod("POST");
@@ -157,15 +182,15 @@ final class RemoteRoom implements HomeLink {
         int status = request.getResponseCode();
         if (status != 200) throw new HttpFailure(status);
         try (InputStream input = request.getInputStream()) {
-            return new JSONObject(readResponse(input));
+            return new JSONObject(readResponse(input, 8192));
         }
     }
 
-    private static String readResponse(InputStream input) throws IOException {
+    static String readResponse(InputStream input, int limit) throws IOException {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         byte[] buffer = new byte[1024];
         for (int count; (count = input.read(buffer)) != -1;) {
-            if (output.size() + count > 4096) throw new IOException("Response exceeds protocol limit");
+            if (output.size() + count > limit) throw new IOException("Response exceeds protocol limit");
             output.write(buffer, 0, count);
         }
         return new String(output.toByteArray(), StandardCharsets.UTF_8);
@@ -190,7 +215,9 @@ final class RemoteRoom implements HomeLink {
     private void failed(Exception failure) {
         if (closed) return;
         close();
-        if (failure instanceof HttpFailure http && http.status == 401) events.authenticationFailed();
+        if (failure instanceof WbCloud.StorageUnavailable) events.storageUnavailable();
+        else if (failure instanceof WbCloud.LoginRequired
+            || (failure instanceof HttpFailure http && http.status == 401)) events.authenticationFailed();
         else events.disconnected();
     }
 

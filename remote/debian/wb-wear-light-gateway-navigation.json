@@ -1,0 +1,9 @@
+{
+  "id": "integrations",
+  "children": [{
+    "id": "wb-wear-light-gateway",
+    "url": "settings/configs/~2Fusr~2Fshare~2Fwb-mqtt-confed~2Fschemas~2Fwb-wear-light-gateway.schema.json",
+    "requiredRole": "admin",
+    "title": {"ru": "Пульт света Wear OS", "en": "Wear OS light remote"}
+  }]
+}

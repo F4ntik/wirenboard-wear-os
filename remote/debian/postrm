@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+#DEBHELPER#
+
+if [ "$1" = purge ]; then
+    state=/var/lib/wb-wear-light-gateway
+    rm -f "$state/token.env"
+    if [ -d "$state" ]; then
+        rmdir "$state" || true
+    fi
+fi

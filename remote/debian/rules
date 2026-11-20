@@ -1,0 +1,8 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+# dpkg in Bullseye cannot unpack zstd-compressed packages.
+override_dh_builddeb:
+	dh_builddeb -- -Zgzip

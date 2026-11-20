@@ -5,11 +5,10 @@ from concurrent.futures import ThreadPoolExecutor
 from http.client import HTTPConnection
 from types import SimpleNamespace
 
-from gateway import ALL_OFF, LIGHTS, VACATION, Controller, Gateway, Pairing, mqtt
+from gateway import ALL_OFF, LIGHTS, SUBSCRIPTIONS, VACATION, Controller, Gateway, Pairing, mqtt
 
 
 KEY = "test_key_with_at_least_thirty_two_characters"
-SUCCESS = SimpleNamespace(is_failure=False)
 
 
 class FakeMQTT:
@@ -45,8 +44,8 @@ class FakeMQTT:
 
     def connect(self):
         self.connected = True
-        self.on_connect(self, None, None, SUCCESS, None)
-        self.on_subscribe(self, None, 7, [SUCCESS] * len(self.subscriptions), None)
+        self.on_connect(self, None, None, 0, None)
+        self.on_subscribe(self, None, 7, [0] * len(self.subscriptions), None)
 
     def disconnect(self):
         self.connected = False
@@ -91,6 +90,15 @@ class GatewayTest(unittest.TestCase):
 
     def test_pairing_disabled_by_default(self):
         self.assertEqual(self.pair("01234567"), (410, {"error": "pairing_unavailable"}))
+
+    def test_paho_v1_callbacks_and_failed_subscription(self):
+        self.mqtt.on_connect(self.mqtt, None, {}, 0)
+        self.mqtt.on_subscribe(self.mqtt, None, 7, [0x80] * len(SUBSCRIPTIONS))
+        self.assertEqual(self.request("GET", "/v1/state")[0], 503)
+        self.mqtt.on_subscribe(self.mqtt, None, 7, [0] * len(SUBSCRIPTIONS))
+        self.assertEqual(self.request("GET", "/v1/state")[0], 200)
+        self.mqtt.on_disconnect(self.mqtt, None, 0)
+        self.assertEqual(self.request("GET", "/v1/state")[0], 503)
 
     def test_pairing_validation_and_one_use(self):
         self.server.pairing = Pairing("01234567")

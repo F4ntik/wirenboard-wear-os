@@ -9,6 +9,7 @@ interface HomeLink extends AutoCloseable {
         void connected();
         void state(String topic, Boolean value, boolean snapshot);
         void disconnected();
+        default void storageUnavailable() { disconnected(); }
         void authenticationFailed();
         void commandUnconfirmed();
     }

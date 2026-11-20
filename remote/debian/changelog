@@ -1,0 +1,5 @@
+wb-wear-light-gateway (0.1.0) unstable; urgency=medium
+
+  * Package the lighting gateway and its Wiren Board configuration editor switch.
+
+ -- F4ntik <F4ntik@users.noreply.github.com>  Fri, 20 Nov 2026 00:00:00 +0000

@@ -63,6 +63,7 @@ public final class HomeActivity extends Activity {
     private SharedPreferences settings;
     private Rooms.Room room;
     private HomeLink connection;
+    private static WbCloud cloud;
     private Boolean vacation;
     private boolean online;
     private boolean connecting;
@@ -88,6 +89,7 @@ public final class HomeActivity extends Activity {
     @Override protected void onCreate(Bundle saved) {
         super.onCreate(saved);
         settings = getSharedPreferences("home", MODE_PRIVATE);
+        String setupError = WbCloud.importProfile(this, settings);
         demo = settings.getBoolean("demo", true);
         String roomId = saved == null ? getIntent().getStringExtra(Rooms.EXTRA) : saved.getString(Rooms.EXTRA);
         Rooms.Room selected = Rooms.find(roomId);
@@ -95,6 +97,10 @@ public final class HomeActivity extends Activity {
         homeFromTile = saved == null ? Rooms.TILE_HOME.equals(roomId) : saved.getBoolean(HOME_FROM_TILE);
         if (selected == null) showHome();
         else showRoom(selected);
+        if (setupError != null) {
+            notice = setupError;
+            updateRoom();
+        }
     }
 
     @Override protected void onNewIntent(Intent intent) {
@@ -230,6 +236,22 @@ public final class HomeActivity extends Activity {
         status = null;
         groupOff = null;
         settingsVisible = true;
+        if (settings.contains(WbCloud.PROFILE)) {
+            addButton("Через WB Cloud", () -> {
+                settings.edit().putBoolean(WbCloud.ACTIVE, true).putBoolean(RemoteSettings.ENABLED, false)
+                    .putBoolean("demo", false).apply();
+                demo = false;
+                showHome();
+            }, R.drawable.ic_action_internet);
+        }
+        if (settings.contains(WbCloud.PREVIOUS_PROFILE)) {
+            addButton("Прежний доступ", () -> {
+                WbCloud.restorePrevious(settings);
+                cloud = null;
+                demo = false;
+                showHome();
+            }, R.drawable.ic_action_back);
+        }
         addButton("Доступ из интернета", this::showRemoteSettings, R.drawable.ic_action_internet);
         body.addView(description("IP или IP:порт Wiren Board", Gravity.CENTER));
         EditText address = new EditText(this);
@@ -250,7 +272,7 @@ public final class HomeActivity extends Activity {
                 return;
             }
             settings.edit().putString("address", value).putBoolean("demo", false)
-                .putBoolean(RemoteSettings.ENABLED, false).apply();
+                .putBoolean(RemoteSettings.ENABLED, false).putBoolean(WbCloud.ACTIVE, false).apply();
             demo = false;
             showHome();
         }, R.drawable.ic_connection);
@@ -336,7 +358,8 @@ public final class HomeActivity extends Activity {
     }
 
     private void useRemote() {
-        settings.edit().putBoolean(RemoteSettings.ENABLED, true).putBoolean("demo", false).apply();
+        settings.edit().putBoolean(RemoteSettings.ENABLED, true).putBoolean(WbCloud.ACTIVE, false)
+            .putBoolean("demo", false).apply();
         demo = false;
         showHome();
     }
@@ -380,6 +403,10 @@ public final class HomeActivity extends Activity {
                     connecting = false;
                     online = true;
                     retryDelay = FIRST_RETRY_MS;
+                    if (settings.getBoolean(WbCloud.ACTIVE, false)) {
+                        WbCloud.confirmRead(HomeActivity.this, settings);
+                        if (WbCloud.STORAGE_NOTICE.equals(notice)) notice = null;
+                    }
                     updateRoom();
                 });
             }
@@ -392,10 +419,18 @@ public final class HomeActivity extends Activity {
                 post(current, HomeActivity.this::connectionFailed);
             }
 
+            @Override public void storageUnavailable() {
+                post(current, () -> {
+                    notice = WbCloud.STORAGE_NOTICE;
+                    connectionFailed();
+                });
+            }
+
             @Override public void authenticationFailed() {
                 post(current, () -> {
                     resetConnection();
-                    notice = "Сервер не принял ключ";
+                    notice = settings.getBoolean(WbCloud.ACTIVE, false)
+                        ? "Проверьте вход в WB Cloud с компьютера" : "Сервер не принял ключ";
                     updateRoom();
                 });
             }
@@ -408,12 +443,16 @@ public final class HomeActivity extends Activity {
                 });
             }
         };
-        if (settings.getBoolean(RemoteSettings.ENABLED, false)) {
+        boolean useCloud = settings.getBoolean(WbCloud.ACTIVE, false);
+        if (useCloud || settings.getBoolean(RemoteSettings.ENABLED, false)) {
             try {
-                connection = new RemoteRoom(RemoteSettings.load(settings), lights(), events);
-            } catch (IllegalArgumentException | GeneralSecurityException | IOException failure) {
+                if (useCloud) {
+                    if (cloud == null) cloud = new WbCloud(settings);
+                    connection = new RemoteRoom(cloud, lights(), events);
+                } else connection = new RemoteRoom(RemoteSettings.load(settings), lights(), events);
+            } catch (IllegalArgumentException | GeneralSecurityException | IOException | JSONException failure) {
                 connecting = false;
-                notice = "Проверьте удалённый доступ";
+                notice = useCloud ? "Настройте WB Cloud с компьютера" : "Проверьте удалённый доступ";
                 updateRoom();
                 return;
             }
