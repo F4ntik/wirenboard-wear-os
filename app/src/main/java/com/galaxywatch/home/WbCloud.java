@@ -11,6 +11,7 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.CookieManager;
+import java.net.CookiePolicy;
 import java.net.URI;
 import java.nio.file.Files;
 import java.security.GeneralSecurityException;
@@ -178,7 +179,7 @@ final class WbCloud {
             }
         }
 
-        CookieManager cookies = new CookieManager();
+        CookieManager cookies = serviceCookieJar();
         String origin = session.profile.origin();
         URI url = tunnelUri(origin, link.getString("tunnelRedirectUrl"));
         for (int step = 0; step < MAX_REDIRECTS; step++) {
@@ -272,10 +273,18 @@ final class WbCloud {
         return failure.status == 401 || failure.status == 403 ? new LoginRequired() : failure;
     }
 
+    static CookieManager serviceCookieJar() {
+        return new CookieManager(null, (uri, cookie) -> {
+            if (!CookiePolicy.ACCEPT_ORIGINAL_SERVER.shouldAccept(uri, cookie)) return false;
+            // Android treats Max-Age as version 1. WB Cloud expects plain name=value pairs.
+            cookie.setVersion(0);
+            return true;
+        });
+    }
+
     private static void applyCookies(CookieManager cookies, URI uri, HttpsURLConnection request) throws IOException {
-        for (String cookie : cookieValues(cookies, uri)) {
-            request.addRequestProperty("Cookie", cookie);
-        }
+        String header = String.join("; ", cookieValues(cookies, uri));
+        if (!header.isEmpty()) request.setRequestProperty("Cookie", header);
     }
 
     private static List<String> cookieValues(CookieManager cookies, URI uri) throws IOException {

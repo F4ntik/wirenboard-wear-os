@@ -7,11 +7,21 @@ import java.io.IOException;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import org.junit.Test;
 
 public class WbCloudTest {
     private static final String ORIGIN = "https://serial01-8765.apps.wirenboard.cloud";
+
+    @Test public void sendsPlainTunnelCookieOnFollowingRequest() throws IOException {
+        var cookies = WbCloud.serviceCookieJar();
+        URI origin = URI.create(ORIGIN);
+        cookies.put(origin.resolve("/authorize"), Map.of("Set-Cookie", List.of(
+            "session=example; Max-Age=600; Path=/; Secure; HttpOnly",
+            "foreign=other; Domain=external.example; Path=/")));
+        assertEquals(List.of("session=example"), cookies.get(origin.resolve("/v1/state"), Map.of()).get("Cookie"));
+    }
 
     @Test public void acceptsSameServiceHttpsUrls() throws IOException {
         assertEquals(URI.create(ORIGIN + "/?grant=temporary"),

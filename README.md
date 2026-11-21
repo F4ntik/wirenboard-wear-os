@@ -6,7 +6,7 @@
 
 ## Попробовать за несколько минут
 
-1. Скачайте файл `wirenboard-wear-os-0.5.0-demo.apk` из [выпуска 0.5.0](https://github.com/F4ntik/wirenboard-wear-os/releases/tag/v0.5.0). На компьютере с Android Platform Tools [подключите часы по Wi-Fi через ADB](https://developer.android.com/tools/adb#wireless-android11-command-line). В папке загрузок выполните `adb install -r wirenboard-wear-os-0.5.0-demo.apk`. Подойдут часы или круглый эмулятор Wear OS с Android API 30 и выше.
+1. Скачайте файл `wirenboard-wear-os-0.5.1-demo.apk` из [выпуска 0.5.1](https://github.com/F4ntik/wirenboard-wear-os/releases/tag/v0.5.1). На компьютере с Android Platform Tools [подключите часы по Wi-Fi через ADB](https://developer.android.com/tools/adb#wireless-android11-command-line). В папке загрузок выполните `adb install -r wirenboard-wear-os-0.5.1-demo.apk`. Подойдут часы или круглый эмулятор Wear OS с Android API 30 и выше.
 2. Откройте «Дом» → «Спальня», включите «Основной», затем нажмите «Погасить всё». В демо меняется только картинка на часах. Свайп вправо вернёт к списку комнат.
 3. Чтобы добавить плитку на Galaxy Watch, смахните влево с циферблата до конца списка, нажмите «Добавить карточки» и выберите «Дом». Нажатие на комнату открывает её пульт. Свайп вправо из него возвращает к плитке.
 
