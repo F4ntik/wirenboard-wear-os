@@ -23,6 +23,8 @@ import javax.net.ssl.HttpsURLConnection;
 
 final class WbCloud {
     static final String ACTIVE = "wb_cloud_active";
+    static final String VERIFY = "wb_cloud_verify_on_watch";
+    static final String SERIAL = "wb_cloud_controller_serial";
     static final String PROFILE = "wb_cloud_profile";
     static final String PREVIOUS_PROFILE = "wb_cloud_previous_profile";
     private static final String IMPORT_ID = "wb_cloud_import_id";
@@ -77,6 +79,7 @@ final class WbCloud {
 
     private final SharedPreferences settings;
     private final String importId;
+    final String controllerSerial;
     private final Session session;
     private CookieManager serviceCookies;
 
@@ -84,6 +87,12 @@ final class WbCloud {
         this.settings = settings;
         this.importId = settings.getString(IMPORT_ID, "");
         session = new Session(parse(new JSONObject(RemoteSettings.unseal(PROFILE, settings.getString(PROFILE, "")))));
+        controllerSerial = session.profile.serial();
+        if (!controllerSerial.equals(settings.getString(SERIAL, ""))) settings.edit().putString(SERIAL, controllerSerial).apply();
+    }
+
+    boolean isCurrent(SharedPreferences preferences) {
+        return importId.equals(preferences.getString(IMPORT_ID, ""));
     }
 
     static String importProfile(Context context, SharedPreferences settings) {
@@ -114,15 +123,18 @@ final class WbCloud {
             editor.putString(PREVIOUS_PROFILE, settings.getString(PROFILE, ""));
             editor.putString(PREVIOUS_IMPORT_ID, settings.getString(IMPORT_ID, ""));
         }
-        if (!editor.putString(PROFILE, seal(profile)).putString(IMPORT_ID, id).putBoolean(ACTIVE, true)
-            .putBoolean(RemoteSettings.ENABLED, false).putBoolean("demo", false).commit()) throw new IOException();
+        if (!settings.contains(RoutePlan.AUTOMATIC) && !settings.getBoolean(RemoteSettings.ENABLED, false)) {
+            editor.putBoolean(ACTIVE, true);
+        }
+        if (!editor.putString(PROFILE, seal(profile)).putString(IMPORT_ID, id).putString(SERIAL, profile.serial())
+            .putBoolean(VERIFY, true).putBoolean("demo", false).commit()) throw new IOException();
     }
 
     static void restorePrevious(SharedPreferences settings) {
         synchronized (settings) {
             settings.edit().putString(PROFILE, settings.getString(PREVIOUS_PROFILE, ""))
-                .putString(IMPORT_ID, settings.getString(PREVIOUS_IMPORT_ID, "")).putBoolean(ACTIVE, true)
-                .putBoolean(RemoteSettings.ENABLED, false).putBoolean("demo", false)
+                .putString(IMPORT_ID, settings.getString(PREVIOUS_IMPORT_ID, "")).remove(SERIAL)
+                .putBoolean(VERIFY, true).putBoolean("demo", false)
                 .remove(PREVIOUS_PROFILE).remove(PREVIOUS_IMPORT_ID).apply();
         }
     }
@@ -132,8 +144,8 @@ final class WbCloud {
         if (!validImportId(id)) return;
         try {
             new File(context.getNoBackupFilesDir(), ONLINE_PREFIX + id).createNewFile();
-            if (settings.contains(PREVIOUS_PROFILE)) {
-                settings.edit().remove(PREVIOUS_PROFILE).remove(PREVIOUS_IMPORT_ID).apply();
+            if (settings.contains(VERIFY) || settings.contains(PREVIOUS_PROFILE)) {
+                settings.edit().remove(VERIFY).remove(PREVIOUS_PROFILE).remove(PREVIOUS_IMPORT_ID).apply();
             }
         } catch (IOException failure) {
             // Without a receipt the PC must keep the prepared profile for a retry.

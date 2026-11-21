@@ -42,7 +42,7 @@ class InstallerTest(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         self.assertIn(f"applicationId '{installer.PACKAGE}'", (root / "app/build.gradle").read_text())
         self.assertIn(["adb", "-s", "watch", "shell", "am", "start", "-W", "-n",
-                       installer.PACKAGE + "/com.galaxywatch.home.HomeActivity"],
+                       installer.PACKAGE + "/com.galaxywatch.home.HomeActivity", "--ez", "verify_wb_cloud", "true"],
                       [call.args[0] for call in commands])
         profile_write = [call for call in commands if call.kwargs["input"] is not None]
         self.assertEqual(1, len(profile_write))
@@ -124,6 +124,18 @@ class InstallerTest(unittest.TestCase):
               patch.object(installer, "app_command")):
             installer.install_prepared(["adb"], Path("app.apk"))
         send.assert_called_once_with(["adb"], PROFILE, resume=True)
+        file.unlink.assert_called_once()
+
+    def test_existing_cloud_receipt_leaves_the_selected_route_alone(self):
+        file = Mock()
+        with (patch.object(win_prepared, "path", return_value=file),
+              patch.object(win_prepared, "lock", return_value=nullcontext()),
+              patch.object(win_prepared, "read", return_value={"watch": "a123", "profile": PROFILE}),
+              patch.object(installer, "watch_identity", return_value="a123"),
+              patch.object(installer, "install_status", return_value="online"),
+              patch.object(installer, "adb") as adb, patch.object(installer, "app_command")):
+            installer.install_prepared(["adb"], Path("app.apk"))
+        adb.assert_called_once_with(["adb"], "shell", "am", "start", "-W", "-n", installer.ACTIVITY)
         file.unlink.assert_called_once()
 
     def test_unknown_result_never_resends_bound_profile(self):

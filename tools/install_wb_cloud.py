@@ -325,7 +325,7 @@ def send_profile(commands, profile, *, resume=False):
             app_command(commands, f"umask 077 && mkdir -p no_backup && rm -f {temporary}"
                         f" && cat > {temporary} && mv {temporary} {BOOTSTRAP}",
                         payload=json.dumps(profile).encode("utf-8"))
-        adb(commands, "shell", "am", "start", "-W", "-n", ACTIVITY)
+        adb(commands, "shell", "am", "start", "-W", "-n", ACTIVITY, "--ez", "verify_wb_cloud", "true")
         deadline = time.monotonic() + 24
         while time.monotonic() < deadline:
             if install_status(commands, profile) == "online":
