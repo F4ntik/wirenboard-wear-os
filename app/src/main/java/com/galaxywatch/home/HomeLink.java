@@ -15,6 +15,7 @@ interface HomeLink extends AutoCloseable {
     }
 
     void connect();
+    boolean isReady();
     void send(Rooms.Light light, boolean value) throws MqttException;
     void sendAllOff() throws MqttException;
 

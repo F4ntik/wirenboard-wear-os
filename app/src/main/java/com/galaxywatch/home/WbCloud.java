@@ -18,6 +18,7 @@ import java.security.GeneralSecurityException;
 import java.util.Locale;
 import java.util.List;
 import java.util.Map;
+import java.util.function.BooleanSupplier;
 
 import javax.net.ssl.HttpsURLConnection;
 
@@ -154,13 +155,14 @@ final class WbCloud {
 
     synchronized String gatewayKey() { return session.profile.gatewayKey(); }
 
-    synchronized HttpsURLConnection open(String path, boolean reading) throws IOException, JSONException {
+    synchronized HttpsURLConnection open(String path, boolean reading, BooleanSupplier cancelled) throws IOException, JSONException {
+        checkCancelled(cancelled);
         session.persist(this::storeProfile);
         URI uri = URI.create(session.profile.origin() + path);
         if (serviceCookies == null || cookieValues(serviceCookies, uri).isEmpty()) {
             serviceCookies = null;
             if (!reading) throw new IOException();
-            authorizeGateway();
+            authorizeGateway(cancelled);
         }
         HttpsURLConnection connection = RemoteRoom.open(uri.toString(), "");
         applyCookies(serviceCookies, uri, connection);
@@ -176,14 +178,21 @@ final class WbCloud {
         return failure;
     }
 
-    private void authorizeGateway() throws IOException, JSONException {
+    private static void checkCancelled(BooleanSupplier cancelled) throws IOException {
+        if (cancelled.getAsBoolean()) throw new IOException("Connection closed");
+    }
+
+    private void authorizeGateway(BooleanSupplier cancelled) throws IOException, JSONException {
         if (session.access == null) refreshAccess();
+        checkCancelled(cancelled);
         JSONObject link;
         try {
             link = issueTunnel();
         } catch (RemoteRoom.HttpFailure failure) {
             if (failure.status != 401) throw tunnelFailure(failure);
+            checkCancelled(cancelled);
             refreshAccess();
+            checkCancelled(cancelled);
             try {
                 link = issueTunnel();
             } catch (RemoteRoom.HttpFailure retryFailure) {
@@ -195,6 +204,7 @@ final class WbCloud {
         String origin = session.profile.origin();
         URI url = tunnelUri(origin, link.getString("tunnelRedirectUrl"));
         for (int step = 0; step < MAX_REDIRECTS; step++) {
+            checkCancelled(cancelled);
             HttpsURLConnection connection = RemoteRoom.open(url.toString(), "");
             try {
                 applyCookies(cookies, url, connection);

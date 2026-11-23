@@ -67,11 +67,10 @@ final class RemoteRoom implements HomeLink {
         try {
             Snapshot snapshot = request("/v1/state", null);
             if (closed) return;
-            if (!connected) {
-                connected = true;
-                events.connected();
-            }
+            boolean firstRead = !connected;
+            connected = true;
             emit(snapshot, Set.of());
+            if (firstRead) events.connected();
         } catch (IOException | JSONException failure) {
             failed(failure);
         }
@@ -131,7 +130,7 @@ final class RemoteRoom implements HomeLink {
     }
 
     private Snapshot exchangeSnapshot(String path, JSONObject body) throws IOException, JSONException {
-        HttpsURLConnection request = cloud == null ? open(config.origin(), path) : cloud.open(path, body == null);
+        HttpsURLConnection request = cloud == null ? open(config.origin(), path) : cloud.open(path, body == null, () -> closed);
         inFlight = request;
         try {
             if (closed) throw new IOException();
@@ -142,7 +141,7 @@ final class RemoteRoom implements HomeLink {
             for (Rooms.Light light : lights) states.put(light, binary(values.get(key(light))));
             return new Snapshot(binary(json.get("vacation")), states);
         } catch (HttpFailure failure) {
-            throw cloud == null ? failure : cloud.gatewayRejected(failure);
+            throw cloud == null || closed ? failure : cloud.gatewayRejected(failure);
         } finally {
             inFlight = null;
             request.disconnect();
@@ -221,13 +220,16 @@ final class RemoteRoom implements HomeLink {
         else events.disconnected();
     }
 
+    @Override public boolean isReady() { return connected && !closed; }
+
     @Override public int confirmationTimeoutMs() { return 11000; }
 
     @Override public synchronized void close() {
         if (closed) return;
         closed = true;
         connected = false;
-        requests.shutdownNow();
+        // A token refresh already on the wire must finish storing its replacement.
+        requests.shutdown();
         HttpsURLConnection request = inFlight;
         if (request != null) new Thread(request::disconnect, "home-https-disconnect").start();
     }

@@ -48,11 +48,7 @@ final class MqttRoom implements HomeLink {
     }
 
     MqttRoom(String address, List<Rooms.Light> lights, Events events, String expectedSerial) {
-        this(address, lights, events, expectedSerial, AUTO_TIMEOUT_MS);
-    }
-
-    MqttRoom(String address, List<Rooms.Light> lights, Events events, String expectedSerial, int timeoutMs) {
-        this(address, lights, new Readiness(lights, expectedSerial), events, timeoutMs);
+        this(address, lights, new Readiness(lights, expectedSerial), events, AUTO_TIMEOUT_MS);
     }
 
     private MqttRoom(String address, List<Rooms.Light> lights, Readiness readiness, Events events, int timeoutMs) {
@@ -215,7 +211,7 @@ final class MqttRoom implements HomeLink {
         if (!closed) events.connected();
     }
 
-    synchronized boolean isReady() {
+    @Override public synchronized boolean isReady() {
         return !closed && active && client != null && client.isConnected();
     }
 

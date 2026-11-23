@@ -33,6 +33,7 @@ import androidx.wear.widget.SwipeDismissFrameLayout;
 
 import java.io.IOException;
 import java.security.GeneralSecurityException;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -59,8 +60,8 @@ public final class HomeActivity extends Activity {
     private final Runnable reconnect = this::connectRoom;
     private final Runnable checkHome = this::probeHome;
     private final Runnable verificationTimeout = this::expireVerification;
-    private RoutePlan routes;
-    private HomeProbe homeProbe;
+    private RoutePlan routes = new RoutePlan();
+    private final Map<Route, Attempt> attempts = new EnumMap<>(Route.class);
     private Route route;
     private final Map<Rooms.Light, Boolean> states = new HashMap<>();
     private final Map<Rooms.Light, Boolean> demoStates = new HashMap<>();
@@ -102,7 +103,6 @@ public final class HomeActivity extends Activity {
     @Override protected void onCreate(Bundle saved) {
         super.onCreate(saved);
         settings = getSharedPreferences("home", MODE_PRIVATE);
-        routes = new RoutePlan(settings.getBoolean(RoutePlan.LAST_CLOUD, false));
         String setupError = WbCloud.importProfile(this, settings);
         installerCheck = getIntent().getBooleanExtra(CHECK_CLOUD, false) || settings.getBoolean(WbCloud.VERIFY, false);
         demo = settings.getBoolean("demo", true);
@@ -266,11 +266,10 @@ public final class HomeActivity extends Activity {
         mode.setChecked(auto);
         mode.setOnCheckedChangeListener((button, checked) -> {
             settings.edit().putBoolean(RoutePlan.AUTOMATIC, checked).apply();
-            routes.reset();
             showSettings();
         });
         body.addView(mode);
-        if (auto) body.addView(description(hasCloud ? "Сначала дома, затем WB Cloud"
+        if (auto) body.addView(description(hasCloud ? "Домашняя сеть и WB Cloud"
             : "Для связи вне дома привяжите WB Cloud с компьютера", Gravity.CENTER));
         if (!auto && hasCloud) {
             addButton(manualRoute() == Route.CLOUD ? "✓ WB Cloud" : "WB Cloud", () -> {
@@ -310,7 +309,6 @@ public final class HomeActivity extends Activity {
             SharedPreferences.Editor editor = settings.edit().putString("address", value).putBoolean("demo", false);
             if (!auto) editor.putBoolean(RemoteSettings.ENABLED, false).putBoolean(WbCloud.ACTIVE, false);
             editor.apply();
-            routes.reset();
             demo = false;
             showHome();
         }, R.drawable.ic_connection);
@@ -442,7 +440,7 @@ public final class HomeActivity extends Activity {
     }
 
     private void connectRoom() {
-        if (!screenActive || settingsVisible || isFinishing() || connection != null) return;
+        if (!screenActive || settingsVisible || isFinishing() || connection != null || !attempts.isEmpty()) return;
         boolean hasCloud = settings.contains(WbCloud.PROFILE);
         long now = SystemClock.elapsedRealtime();
         if (installerCheck) verifyUntil = now + 20_000;
@@ -456,109 +454,176 @@ public final class HomeActivity extends Activity {
             return;
         }
 
-        Route selected = routes.select(automatic(), manualRoute(), !address().isEmpty(), hasCloud, checkingCloud);
-        if (automatic() && selected == Route.HOME && hasCloud) routes.attemptingHome();
-        route = selected;
-        int current = session;
+        List<Route> choices = RoutePlan.candidates(automatic(), manualRoute(), !address().isEmpty(), hasCloud, checkingCloud);
+        route = choices.size() == 1 ? choices.get(0) : null;
         connecting = true;
-        HomeLink.Events events = new HomeLink.Events() {
-            @Override public void connected() {
-                post(current, () -> {
-                    if (checkingCloud && SystemClock.elapsedRealtime() >= verifyUntil) {
-                        expireVerification();
-                        return;
-                    }
-                    if (connection instanceof MqttRoom mqtt && !mqtt.isReady()) return;
-                    connecting = false;
-                    online = true;
-                    retryDelay = FIRST_RETRY_MS;
-                    rememberRoute(selected);
-                    if (!"Нет подтверждения".equals(notice)) notice = null;
-                    if (selected == Route.CLOUD) {
-                        verifyUntil = 0;
-                        main.removeCallbacks(verificationTimeout);
-                        WbCloud.confirmRead(HomeActivity.this, settings);
-                        if (resumeManualAfterCheck()) return;
-                        checkingCloud = false;
-                        if (automatic() && !address().isEmpty()) scheduleProbe(routes.homeDelay(SystemClock.elapsedRealtime()));
-                    }
-                    updateRoom();
-                });
-            }
-
-            @Override public void state(String topic, Boolean value, boolean retained) {
-                post(current, () -> receive(topic, value, retained));
-            }
-
-            @Override public void disconnected() {
-                post(current, HomeActivity.this::connectionFailed);
-            }
-
-            @Override public void storageUnavailable() {
-                post(current, () -> {
-                    notice = WbCloud.STORAGE_NOTICE;
-                    connectionFailed();
-                });
-            }
-
-            @Override public void authenticationFailed() {
-                post(current, () -> {
-                    verifyUntil = 0;
-                    main.removeCallbacks(verificationTimeout);
-                    notice = selected == Route.CLOUD
-                        ? "Проверьте вход в WB Cloud с компьютера" : "Сервер не принял ключ";
-                    if (resumeManualAfterCheck()) return;
-                    if (automatic()) connectionFailed();
-                    else {
-                        resetConnection();
-                        updateRoom();
-                    }
-                });
-            }
-
-            @Override public void commandUnconfirmed() {
-                post(current, () -> {
-                    notice = "Нет подтверждения";
-                    resetConnection();
-                    connectRoom();
-                });
-            }
-        };
-        try {
-            connection = switch (selected) {
-                case HOME -> automatic()
-                    ? new MqttRoom(address(), lights(), events, hasCloud ? localSerial() : null, routes.homeTimeout(hasCloud, now))
-                    : new MqttRoom(address(), lights(), events);
-                case CLOUD -> new RemoteRoom(cloudProfile(), lights(), events);
-                case HTTPS -> new RemoteRoom(RemoteSettings.load(settings), lights(), events);
-            };
-        } catch (IllegalArgumentException | GeneralSecurityException | IOException | JSONException failure) {
-            notice = switch (selected) {
-                case HOME -> "Проверьте привязку или выберите «Вручную»";
-                case CLOUD -> "Проверьте привязку WB Cloud";
-                case HTTPS -> "Проверьте удалённый доступ";
-            };
-            if (resumeManualAfterCheck()) return;
-            if (automatic()) connectionFailed();
-            else {
-                resetConnection();
-                updateRoom();
-            }
-            return;
-        }
-        new Thread(connection::connect, "home-connect").start();
-        if (selected == Route.CLOUD && automatic() && !checkingCloud && !address().isEmpty()) {
-            scheduleProbe(routes.homeDelay(now));
+        for (Route choice : choices) {
+            Attempt attempt = new Attempt(choice);
+            attempts.put(choice, attempt);
+            long delay = choices.size() > 1 ? routes.retryIn(choice, now) : 0;
+            if (delay == 0) attempt.run();
+            else main.postDelayed(attempt, delay);
         }
         updateRoom();
     }
 
-    private void rememberRoute(Route verified) {
-        if (!automatic()) return;
-        routes.confirmed(verified);
-        boolean usedCloud = verified == Route.CLOUD;
-        if (settings.getBoolean(RoutePlan.LAST_CLOUD, false) != usedCloud) {
-            settings.edit().putBoolean(RoutePlan.LAST_CLOUD, usedCloud).apply();
+    // Callbacks from both transports are arbitrated on the main thread. Only the winner can send commands.
+    private final class Attempt implements HomeLink.Events, Runnable {
+        final Route channel;
+        final Map<String, Boolean> snapshot = new HashMap<>();
+        long backoff = FIRST_RETRY_MS;
+        HomeLink client;
+        boolean ready;
+        boolean waitingForSnapshot;
+        final Runnable snapshotTimeout = () -> failed(snapshot.get(Rooms.VACATION) == null
+            ? "Нет данных о режиме «Отпуск»" : "Нет данных о лампах", false);
+
+        Attempt(Route channel) { this.channel = channel; }
+
+        @Override public void run() {
+            if (attempts.get(channel) != this) return;
+            try {
+                client = switch (channel) {
+                    case HOME -> automatic()
+                        ? new MqttRoom(address(), lights(), this, settings.contains(WbCloud.PROFILE) ? localSerial() : null)
+                        : new MqttRoom(address(), lights(), this);
+                    case CLOUD -> new RemoteRoom(cloudProfile(), lights(), this);
+                    case HTTPS -> new RemoteRoom(RemoteSettings.load(settings), lights(), this);
+                };
+                new Thread(client::connect, "home-connect-" + channel.name()).start();
+                if (!online) connecting = true;
+                updateRoom();
+            } catch (IllegalArgumentException | GeneralSecurityException | IOException | JSONException failure) {
+                String message = switch (channel) {
+                    case HOME -> "Проверьте привязку или выберите «Вручную»";
+                    case CLOUD -> "Проверьте привязку WB Cloud";
+                    case HTTPS -> "Проверьте удалённый доступ";
+                };
+                main.post(() -> failed(message, true));
+            }
+        }
+
+        void close() {
+            main.removeCallbacks(this);
+            main.removeCallbacks(snapshotTimeout);
+            if (client != null) client.close();
+        }
+
+        @Override public void state(String topic, Boolean value, boolean retained) {
+            main.post(() -> {
+                if (client != null && connection == client) receive(topic, value, retained);
+                else if (attempts.get(channel) == this) {
+                    // RemoteRoom emits vacation first in each complete cloud snapshot.
+                    if (channel == Route.CLOUD && Rooms.VACATION.equals(topic)) snapshot.clear();
+                    snapshot.put(topic, value);
+                    if (ready) accept();
+                }
+            });
+        }
+
+        @Override public void connected() {
+            main.post(() -> {
+                ready = true;
+                accept();
+            });
+        }
+
+        private void accept() {
+            if (attempts.get(channel) != this || !client.isReady()) return;
+            if (checkingCloud && SystemClock.elapsedRealtime() >= verifyUntil) {
+                expireVerification();
+                return;
+            }
+            if (channel == Route.CLOUD && attempts.size() > 1
+                && (snapshot.get(Rooms.VACATION) == null || lights().stream().noneMatch(light -> snapshot.get(light.stateTopic()) != null))) {
+                if (!waitingForSnapshot) {
+                    waitingForSnapshot = true;
+                    main.postDelayed(snapshotTimeout, 5000);
+                }
+                return;
+            }
+            main.removeCallbacks(snapshotTimeout);
+            if (online && (!pending.isEmpty() || groupCommand != null)) {
+                attempts.remove(channel);
+                close();
+                scheduleProbe(FIRST_RETRY_MS);
+                return;
+            }
+            attempts.remove(channel);
+            closeAttempts();
+            if (connection != null) {
+                session++;
+                connection.close();
+            }
+            connection = client;
+            route = channel;
+            states.clear();
+            vacation = snapshot.get(Rooms.VACATION);
+            for (Rooms.Light light : lights()) states.put(light, snapshot.get(light.stateTopic()));
+            snapshot.clear();
+            connecting = false;
+            online = true;
+            routes.connected(SystemClock.elapsedRealtime());
+            retryDelay = FIRST_RETRY_MS;
+            if (!"Нет подтверждения".equals(notice)) notice = null;
+            if (channel == Route.CLOUD) {
+                verifyUntil = 0;
+                main.removeCallbacks(verificationTimeout);
+                WbCloud.confirmRead(HomeActivity.this, settings);
+                if (resumeManualAfterCheck()) return;
+                checkingCloud = false;
+                if (automatic() && !address().isEmpty()) scheduleProbe(RoutePlan.RECHECK_MS);
+            }
+            updateRoom();
+        }
+
+        @Override public void disconnected() { main.post(() -> failed(null, false)); }
+        @Override public void storageUnavailable() { main.post(() -> failed(WbCloud.STORAGE_NOTICE, false)); }
+        @Override public void authenticationFailed() {
+            main.post(() -> failed(channel == Route.CLOUD ? "Проверьте вход в WB Cloud с компьютера" : "Сервер не принял ключ", true));
+        }
+
+        private void failed(String message, boolean rejected) {
+            boolean active = client != null && connection == client;
+            if (!active && attempts.get(channel) != this) return;
+            if (!active && online) {
+                // The return-home probe failed. The working cloud connection stays open.
+                attempts.remove(channel);
+                close();
+                scheduleProbe(RoutePlan.RECHECK_MS);
+                return;
+            }
+            if (message != null && !"Нет подтверждения".equals(notice)) notice = message;
+            if (!active && attempts.size() > 1) {
+                close();
+                Attempt next = new Attempt(channel);
+                next.backoff = Math.min(backoff * 2, MAX_RETRY_MS);
+                attempts.put(channel, next);
+                main.postDelayed(next, backoff);
+                connecting = attempts.values().stream().anyMatch(attempt -> attempt.client != null);
+                updateRoom();
+                return;
+            }
+            if (rejected) {
+                verifyUntil = 0;
+                main.removeCallbacks(verificationTimeout);
+                if (resumeManualAfterCheck()) return;
+                if (!automatic()) {
+                    resetConnection();
+                    updateRoom();
+                    return;
+                }
+            }
+            connectionFailed();
+        }
+
+        @Override public void commandUnconfirmed() {
+            main.post(() -> {
+                if (client == null || connection != client) return;
+                notice = "Нет подтверждения";
+                resetConnection();
+                connectRoom();
+            });
         }
     }
 
@@ -584,6 +649,7 @@ public final class HomeActivity extends Activity {
     }
 
     private void stopRoom() {
+        routes = new RoutePlan();
         main.removeCallbacks(reconnect);
         retryDelay = FIRST_RETRY_MS;
         notice = null;
@@ -594,7 +660,7 @@ public final class HomeActivity extends Activity {
         session++;
         main.removeCallbacks(reconnect);
         main.removeCallbacks(checkHome);
-        closeProbe();
+        closeAttempts();
         HomeLink old = connection;
         connection = null;
         route = null;
@@ -610,20 +676,13 @@ public final class HomeActivity extends Activity {
     }
 
     private void connectionFailed() {
-        long now = SystemClock.elapsedRealtime();
-        boolean retryVerification = checkingCloud && now < verifyUntil;
-        if (!retryVerification && resumeManualAfterCheck()) return;
+        if (checkingCloud && SystemClock.elapsedRealtime() >= verifyUntil && resumeManualAfterCheck()) return;
         if (groupCommand != null || !pending.isEmpty()) notice = "Нет подтверждения";
-        long delay = retryDelay;
-        if (automatic() && route == Route.HOME) {
-            routes.homeFailed(now);
-            if (settings.contains(WbCloud.PROFILE)) delay = 0;
-        } else if (automatic() && route == Route.CLOUD && !retryVerification) {
-            routes.cloudFailed(now);
-        }
+        boolean raceAgain = online && automatic() && settings.contains(WbCloud.PROFILE) && !address().isEmpty();
+        if (raceAgain) routes.lost(route, SystemClock.elapsedRealtime());
         resetConnection();
         updateRoom();
-        main.postDelayed(reconnect, delay);
+        main.postDelayed(reconnect, raceAgain ? 0 : retryDelay);
         retryDelay = Math.min(retryDelay * 2, MAX_RETRY_MS);
     }
 
@@ -632,63 +691,16 @@ public final class HomeActivity extends Activity {
         main.postDelayed(checkHome, delay);
     }
 
-    private void closeProbe() {
-        if (homeProbe != null) homeProbe.client.close();
-        homeProbe = null;
+    private void closeAttempts() {
+        for (Attempt attempt : attempts.values()) attempt.close();
+        attempts.clear();
     }
 
     private void probeHome() {
-        if (!screenActive || checkingCloud || route != Route.CLOUD || !automatic() || homeProbe != null) return;
-        homeProbe = new HomeProbe();
-        new Thread(homeProbe.client::connect, "home-mqtt-probe").start();
-    }
-
-    private final class HomeProbe implements HomeLink.Events {
-        final MqttRoom client = new MqttRoom(address(), lights(), this, cloud.controllerSerial);
-        final Map<String, Boolean> snapshot = new HashMap<>();
-
-        @Override public void connected() {
-            main.post(() -> {
-                if (homeProbe != this) return;
-                if (!client.isReady()) return;
-                if (!pending.isEmpty() || groupCommand != null) {
-                    closeProbe();
-                    scheduleProbe(FIRST_RETRY_MS);
-                    return;
-                }
-                // Hand over the already verified MQTT session and its states together.
-                homeProbe = null;
-                resetConnection();
-                connection = client;
-                route = Route.HOME;
-                vacation = snapshot.get(Rooms.VACATION);
-                for (Rooms.Light light : lights()) states.put(light, snapshot.get(light.stateTopic()));
-                online = true;
-                retryDelay = FIRST_RETRY_MS;
-                if (!"Нет подтверждения".equals(notice)) notice = null;
-                rememberRoute(Route.HOME);
-                updateRoom();
-            });
-        }
-
-        @Override public void disconnected() {
-            main.post(() -> {
-                if (connection == client) connectionFailed();
-                else if (homeProbe == this) {
-                    closeProbe();
-                    routes.homeFailed(SystemClock.elapsedRealtime());
-                    scheduleProbe(RoutePlan.RECHECK_MS);
-                }
-            });
-        }
-        public void authenticationFailed() { disconnected(); }
-        public void commandUnconfirmed() { disconnected(); }
-        public void state(String topic, Boolean value, boolean retained) {
-            main.post(() -> {
-                if (connection == client) receive(topic, value, retained);
-                else if (homeProbe == this) snapshot.put(topic, value);
-            });
-        }
+        if (!screenActive || !online || route != Route.CLOUD || !automatic() || !attempts.isEmpty()) return;
+        Attempt attempt = new Attempt(Route.HOME);
+        attempts.put(Route.HOME, attempt);
+        attempt.run();
     }
 
     private void refreshWhenIdle() {
@@ -830,7 +842,7 @@ public final class HomeActivity extends Activity {
         else if (!online) text = "Нет связи с домом";
         else if (vacation == null) text = "Статус «Отпуска» неизвестен";
         else text = "";
-        String channel = route == null || demo ? "" : online ? route.label
+        String channel = demo ? "" : route == null ? (connecting ? "Проверяем связь…" : "") : online ? route.label
             : route == Route.HOME ? "Ищем дом…" : "Подключаемся · " + route.label;
         if (!channel.contentEquals(routeLabel.getText())) routeLabel.setText(channel);
         routeLabel.setVisibility(channel.isEmpty() ? View.GONE : View.VISIBLE);
