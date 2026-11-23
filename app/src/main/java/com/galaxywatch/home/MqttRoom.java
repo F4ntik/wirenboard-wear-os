@@ -28,7 +28,8 @@ final class MqttRoom implements HomeLink {
     private static final Pattern ADDRESS = Pattern.compile(
         "(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})(?::(\\d{1,5}))?");
     private static final String SERIAL = "/devices/system/controls/Short SN";
-    private static final int AUTO_TIMEOUT_MS = 5000;
+    static final int AUTO_TIMEOUT_MS = 5000;
+    private final int connectTimeoutMs;
 
     private final String address;
     private final String[] topics;
@@ -43,14 +44,19 @@ final class MqttRoom implements HomeLink {
     private boolean active;
 
     MqttRoom(String address, List<Rooms.Light> lights, Events events) {
-        this(address, lights, null, events);
+        this(address, lights, null, events, 6000);
     }
 
     MqttRoom(String address, List<Rooms.Light> lights, Events events, String expectedSerial) {
-        this(address, lights, new Readiness(lights, expectedSerial), events);
+        this(address, lights, events, expectedSerial, AUTO_TIMEOUT_MS);
     }
 
-    private MqttRoom(String address, List<Rooms.Light> lights, Readiness readiness, Events events) {
+    MqttRoom(String address, List<Rooms.Light> lights, Events events, String expectedSerial, int timeoutMs) {
+        this(address, lights, new Readiness(lights, expectedSerial), events, timeoutMs);
+    }
+
+    private MqttRoom(String address, List<Rooms.Light> lights, Readiness readiness, Events events, int timeoutMs) {
+        this.connectTimeoutMs = timeoutMs;
         this.address = address;
         this.events = events;
         this.readiness = readiness;
@@ -90,7 +96,7 @@ final class MqttRoom implements HomeLink {
         try {
             IMqttToken transport = start();
             if (transport == null) return;
-            long connectDeadline = started + TimeUnit.MILLISECONDS.toNanos(readiness == null ? 6000 : AUTO_TIMEOUT_MS);
+            long connectDeadline = started + TimeUnit.MILLISECONDS.toNanos(connectTimeoutMs);
             long connectTime = TimeUnit.NANOSECONDS.toMillis(connectDeadline - System.nanoTime());
             if (connectTime <= 0) throw new MqttException(MqttException.REASON_CODE_CLIENT_TIMEOUT);
             transport.waitForCompletion(connectTime);
@@ -207,6 +213,10 @@ final class MqttRoom implements HomeLink {
             events.state(state.topic(), state.value(), state.retained());
         }
         if (!closed) events.connected();
+    }
+
+    synchronized boolean isReady() {
+        return !closed && active && client != null && client.isConnected();
     }
 
     @Override public void send(Rooms.Light light, boolean value) throws MqttException {
