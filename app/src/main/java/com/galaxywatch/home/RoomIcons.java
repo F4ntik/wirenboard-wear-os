@@ -1,6 +1,11 @@
 package com.galaxywatch.home;
 
 record RoomIcons(int icon, int crown, int surface) {
+    static final java.util.List<String> THEMES = java.util.List.of(
+        "living", "kitchen", "bedroom", "hall", "kids", "office", "wc", "shower", "generic");
+
+    static String knownTheme(String name) { return name != null && THEMES.contains(name) ? name : "generic"; }
+
     static RoomIcons forRoom(String id) {
         return switch (id) {
             case "living" -> new RoomIcons(R.drawable.ic_room_living, R.drawable.crown_living, 0xFF48303A);

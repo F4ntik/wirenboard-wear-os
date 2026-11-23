@@ -27,7 +27,7 @@ import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 final class MqttRoom implements HomeLink {
     private static final Pattern ADDRESS = Pattern.compile(
         "(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})(?::(\\d{1,5}))?");
-    private static final String SERIAL = "/devices/system/controls/Short SN";
+    static final String SERIAL = "/devices/system/controls/Short SN";
     static final int AUTO_TIMEOUT_MS = 5000;
     private final int connectTimeoutMs;
 
@@ -319,7 +319,7 @@ final class MqttRoom implements HomeLink {
         }
     }
 
-    private static final class ConnectionSocketFactory extends SocketFactory {
+    static final class ConnectionSocketFactory extends SocketFactory {
         private final Socket socket;
 
         ConnectionSocketFactory(Socket socket) { this.socket = socket; }

@@ -49,7 +49,7 @@ final class HomeConnections {
         return saved.isEmpty() ? cloudProfile(settings).controllerSerial : saved;
     }
 
-    private static synchronized WbCloud cloudProfile(SharedPreferences settings)
+    static synchronized WbCloud cloudProfile(SharedPreferences settings)
         throws GeneralSecurityException, IOException, JSONException {
         synchronized (settings) {
             if (cloudSettings != settings) {

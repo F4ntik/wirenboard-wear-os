@@ -1,9 +1,11 @@
 from contextlib import nullcontext
 from email.message import Message
+from io import BytesIO
 import json
 import os
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
@@ -14,9 +16,94 @@ import win_prepared
 ORIGIN = "https://serial01-8765.apps.wirenboard.cloud"
 ID = "0a" * 16
 PROFILE = {"refresh": "example.refresh.token", "gatewayKey": "example-gateway", "installId": ID}
+REVISION = "a" * 64
+GATEWAY_KEY = "example-gateway-key-1234567890-abcd"
+
+
+def fake_response(status, body, content_type="application/json"):
+    response = BytesIO(json.dumps(body).encode())
+    response.code = status
+    response.headers = Message()
+    response.headers["Content-Type"] = content_type
+    return response
+
+
+def layout(serial="serial01", rooms=None):
+    return {"schema": 1, "controller": serial, "revision": REVISION,
+            "rooms": [{"lights": [{"id": "lamp"}]}] if rooms is None else rooms}
+
+
+def home_state(ready=True, lights=None):
+    return {"revision": REVISION, "vacation": False,
+            "lights": {"lamp": {"power": ready}} if lights is None else lights}
 
 
 class InstallerTest(unittest.TestCase):
+    def test_app_only_updates_without_requesting_cloud_credentials(self):
+        apk = Path(__file__)
+        with (patch.object(installer.sys, "argv", ["installer", "--app-only", "--watch", "watch", str(apk)]),
+              patch.object(installer, "install") as install,
+              patch.object(installer, "prepare_profile") as cloud,
+              patch("builtins.print")):
+            installer.main()
+        install.assert_called_once_with(["adb", "-s", "watch"], apk)
+        cloud.assert_not_called()
+
+    def prepare_with_service(self, endpoints, expect_error=None):
+        cloud = Mock()
+        replies = [{"access": "new.access.token", "refresh": "new.refresh.token"},
+                   [{"serialNumber": "SERIAL01"}], [{"port": 8765}], {"tunnelRedirectUrl": "/?grant=example"}]
+        cloud.open.side_effect = [fake_response(200, reply) for reply in replies]
+        service = Mock()
+        service.open.side_effect = [fake_response(200, {"token": GATEWAY_KEY}), *endpoints]
+        pair_code = Mock(return_value="01234567")
+        args = SimpleNamespace(controller="serial01", port=8765, pair_with_putty=None)
+        with (patch.object(installer, "client", side_effect=[object(), cloud, service]),
+              patch.object(installer, "open_service"), patch.object(installer, "send_profile") as send):
+            if expect_error:
+                with self.assertRaisesRegex(installer.SetupError, expect_error):
+                    installer.prepare_profile(args, lambda _: "old.refresh.token", pair_prompt=pair_code)
+            else:
+                profile = installer.prepare_profile(args, lambda _: "old.refresh.token", pair_prompt=pair_code)
+                self.assertEqual(("SERIAL01", GATEWAY_KEY, "new.refresh.token"),
+                                 (profile["serial"], profile["gatewayKey"], profile["refresh"]))
+            send.assert_not_called()
+        pair_code.assert_called_once()
+        requests = [call.args[0] for call in service.open.call_args_list]
+        self.assertEqual(ORIGIN + "/v1/pair", requests[0].full_url)
+        self.assertEqual({"code": "01234567"}, json.loads(requests[0].data))
+        for request in requests[1:]:
+            self.assertEqual("GET", request.get_method())
+            self.assertEqual("Bearer " + GATEWAY_KEY, request.get_header("Authorization"))
+        return [request.full_url.removeprefix(ORIGIN) for request in requests[1:]]
+
+    def test_preparation_accepts_v2_only_and_empty_catalog(self):
+        for current_layout, state in [(layout(), home_state()), (layout(rooms=[]), home_state(lights={}))]:
+            with self.subTest(layout=current_layout):
+                self.assertEqual(["/v2/layout", "/v2/state"], self.prepare_with_service([
+                    fake_response(200, current_layout), fake_response(200, state)]))
+
+    def test_preparation_falls_back_to_v1_only_after_gateway_404(self):
+        self.assertEqual(["/v2/layout", "/v1/state"], self.prepare_with_service([
+            fake_response(404, {"error": "not_found"}),
+            fake_response(200, {"vacation": False, "lights": {"relay/K1": False}})]))
+
+    def test_preparation_rejects_v2_errors_without_legacy_fallback_or_redeem_retry(self):
+        cases = [
+            ([fake_response(404, {"error": "not_found"}, "text/html")], "HTTP 404"),
+            ([fake_response(404, {"error": "other"})], "HTTP 404"),
+            ([fake_response(503, {"error": "catalog_unavailable"})], "HTTP 503"),
+            ([fake_response(200, None)], "неверную схему"),
+            ([fake_response(200, layout("serial02"))], "другому контроллеру"),
+            ([fake_response(200, layout()), fake_response(200, {**home_state(), "revision": "b" * 64})], "изменилась"),
+            ([fake_response(200, layout()), fake_response(200, {**home_state(), "vacation": None})], "состояние дома"),
+            ([fake_response(200, layout()), fake_response(200, home_state(0))], "ни одной лампы"),
+        ]
+        for replies, error in cases:
+            with self.subTest(error=error):
+                requests = self.prepare_with_service(replies, expect_error=error)
+                self.assertEqual(["/v2/layout", "/v2/state"][:len(replies)], requests)
+
     def test_connects_only_to_the_address_entered_on_the_watch(self):
         replies = [Mock(stdout=b"List of devices attached\n"), Mock(), Mock(stdout=b"device\n")]
         with patch.object(installer, "adb", side_effect=replies) as adb, \

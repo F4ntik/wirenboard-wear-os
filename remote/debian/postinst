@@ -2,6 +2,11 @@
 set -eu
 
 if [ "$1" = configure ]; then
+    config=/etc/wb-wear-light-gateway.conf
+    # dpkg preserves the obsolete 0.1 conffile. Seed a catalog only on fresh installs.
+    if [ -z "${2:-}" ] && [ ! -e "$config" ]; then
+        install -m 0644 /usr/share/wb-wear-light-gateway/wb-wear-light-gateway.conf "$config"
+    fi
     state=/var/lib/wb-wear-light-gateway
     install -d -m 0700 -o root -g root "$state"
     if [ ! -s "$state/token.env" ]; then

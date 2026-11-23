@@ -48,6 +48,7 @@ import org.json.JSONException;
 public final class HomeActivity extends Activity {
     private static final String FROM_TILE = "from_tile";
     private static final String HOME_FROM_TILE = "home_from_tile";
+    static final String LEGACY_SETTINGS = "legacy_connection_settings";
     private static final String CHECK_CLOUD = "verify_wb_cloud";
     private static final int BG = 0xFF171118;
     private static final int SURFACE = 0xFF302631;
@@ -118,11 +119,17 @@ public final class HomeActivity extends Activity {
         String setupError = WbCloud.importProfile(this, settings);
         installerCheck = getIntent().getBooleanExtra(CHECK_CLOUD, false) || settings.getBoolean(WbCloud.VERIFY, false);
         demo = settings.getBoolean("demo", HomeConnections.DEFAULT_DEMO);
+        CatalogLink.configureBundledHome(this);
+        if (routeToCatalog(getIntent())) return;
         String roomId = saved == null ? getIntent().getStringExtra(Rooms.EXTRA) : saved.getString(Rooms.EXTRA);
         Rooms.Room selected = Rooms.find(roomId);
         fromTile = selected != null && (saved == null || saved.getBoolean(FROM_TILE));
         homeFromTile = saved == null ? Rooms.TILE_HOME.equals(roomId) : saved.getBoolean(HOME_FROM_TILE);
-        if (selected == null) showHome();
+        if (getIntent().getBooleanExtra(LEGACY_SETTINGS, false)) {
+            installerCheck = false;
+            showSettings();
+        }
+        else if (selected == null) showHome();
         else showRoom(selected);
         if (setupError != null) {
             notice = setupError;
@@ -135,12 +142,27 @@ public final class HomeActivity extends Activity {
         setIntent(intent);
         onlyLit = false;
         installerCheck = intent.getBooleanExtra(CHECK_CLOUD, false);
+        if (routeToCatalog(intent)) return;
         String entry = intent.getStringExtra(Rooms.EXTRA);
         Rooms.Room selected = Rooms.find(entry);
         fromTile = selected != null;
         homeFromTile = Rooms.TILE_HOME.equals(entry);
         if (selected == null) showHome();
         else showRoom(selected);
+    }
+
+    private boolean routeToCatalog(Intent intent) {
+        if (intent.getBooleanExtra(LEGACY_SETTINGS, false)) return false;
+        boolean firstUse = HomeConnections.DEFAULT_DEMO && !settings.contains("demo") && address().isEmpty()
+            && !settings.contains(WbCloud.PROFILE);
+        if (!CatalogLink.paired(this) && !firstUse && !installerCheck) return false;
+        if (!CatalogLink.paired(this) && intent.getBooleanExtra("legacy_verify", false)) return false;
+        Intent catalog = new Intent(this, CatalogActivity.class);
+        catalog.putExtra(Rooms.EXTRA, intent.getStringExtra(Rooms.EXTRA));
+        catalog.putExtra("verify_cloud", installerCheck);
+        startActivity(catalog);
+        finish();
+        return true;
     }
 
     @Override protected void onStart() {
@@ -189,6 +211,15 @@ public final class HomeActivity extends Activity {
     }
 
     private void showHome() {
+        if (getIntent().getBooleanExtra(LEGACY_SETTINGS, false) && CatalogLink.paired(this)) {
+            finish();
+            return;
+        }
+        if (CatalogLink.paired(this) && !installerCheck) {
+            startActivity(new Intent(this, CatalogActivity.class));
+            finish();
+            return;
+        }
         stopRoom();
         RoomCache.requestUpdate(this);
         room = null;
@@ -267,8 +298,11 @@ public final class HomeActivity extends Activity {
         settingsBack = this::showHome;
         status = null;
         groupOff = null;
+        addButton("Подключить дом", () -> startActivity(new Intent(this, CatalogActivity.class)), R.drawable.ic_action_link);
         addButton("Избранные комнаты", this::showFavorites, R.drawable.ic_room_grid);
-        addButton("Подключение", this::showSettings, R.drawable.ic_connection);
+        if (!HomeConnections.DEFAULT_DEMO || !demo || !address().isEmpty() || settings.contains(WbCloud.PROFILE)) {
+            addButton("Подключение", this::showSettings, R.drawable.ic_connection);
+        }
         addButton("Назад", settingsBack, R.drawable.ic_action_back);
     }
 
@@ -308,7 +342,7 @@ public final class HomeActivity extends Activity {
         stopRoom();
         room = null;
         page("Подключение");
-        settingsBack = this::showPreferences;
+        settingsBack = getIntent().getBooleanExtra(LEGACY_SETTINGS, false) ? this::finish : this::showPreferences;
         status = null;
         groupOff = null;
         settingsVisible = true;
@@ -369,7 +403,7 @@ public final class HomeActivity extends Activity {
         }, R.drawable.ic_connection);
         if (!auto) addButton(manualRoute() == Route.HTTPS ? "✓ Свой HTTPS" : "Свой HTTPS",
             this::showRemoteSettings, R.drawable.ic_action_internet);
-        if (!demo || !address().isEmpty() || settings.getBoolean(RemoteSettings.ENABLED, false)) {
+        if (!CatalogLink.paired(this) && (!HomeConnections.DEFAULT_DEMO || !demo || !address().isEmpty() || settings.getBoolean(RemoteSettings.ENABLED, false))) {
             addButton(demo ? "Выйти из демо" : "Открыть демо", () -> {
                 demo = !demo;
                 settings.edit().putBoolean("demo", demo).apply();

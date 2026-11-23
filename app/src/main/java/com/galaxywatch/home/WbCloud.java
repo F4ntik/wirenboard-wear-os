@@ -173,7 +173,7 @@ final class WbCloud {
         if (serviceCookies == null || cookieValues(serviceCookies, uri).isEmpty()) {
             serviceCookies = null;
             if (!reading) throw new IOException();
-            authorizeGateway(cancelled);
+            authorizeGateway(path, cancelled);
         }
         HttpsURLConnection connection = RemoteRoom.open(uri.toString(), "");
         applyCookies(serviceCookies, uri, connection);
@@ -193,7 +193,7 @@ final class WbCloud {
         if (cancelled.getAsBoolean()) throw new IOException("Connection closed");
     }
 
-    private void authorizeGateway(BooleanSupplier cancelled) throws IOException, JSONException {
+    private void authorizeGateway(String path, BooleanSupplier cancelled) throws IOException, JSONException {
         if (session.access == null) refreshAccess();
         checkCancelled(cancelled);
         JSONObject link;
@@ -226,10 +226,10 @@ final class WbCloud {
                     if (location == null) throw new IOException();
                     url = tunnelUri(origin, safeResolve(url, location).toString());
                 } else {
-                    URI readUrl = URI.create(origin + "/v1/state");
-                    boolean gatewayResponse = (status == 200 || status == 404) && isJson(connection);
-                    if (cookieValues(cookies, readUrl).isEmpty()
-                        || (!gatewayResponse && !isGatewayChallenge(connection, status))) throw new IOException();
+                    URI readUrl = URI.create(origin + path);
+                    boolean gatewayResponse = status == 200 && isJson(connection);
+                    if (cookieValues(cookies, readUrl).isEmpty() || (!gatewayResponse
+                        && !isGatewayChallenge(connection, status) && !isGatewayNotFound(connection, status))) throw new IOException();
                     serviceCookies = cookies;
                     return;
                 }
@@ -241,11 +241,19 @@ final class WbCloud {
     }
 
     static boolean isGatewayChallenge(HttpsURLConnection connection, int status) throws IOException {
-        if (status != 401 || !isJson(connection)) return false;
+        return status == 401 && isGatewayError(connection, "unauthorized");
+    }
+
+    static boolean isGatewayNotFound(HttpsURLConnection connection, int status) throws IOException {
+        return status == 404 && isGatewayError(connection, "not_found");
+    }
+
+    private static boolean isGatewayError(HttpsURLConnection connection, String code) throws IOException {
+        if (!isJson(connection)) return false;
         try (InputStream error = connection.getErrorStream()) {
             if (error == null) return false;
             JSONObject body = new JSONObject(RemoteRoom.readResponse(error, 512));
-            return body.length() == 1 && "unauthorized".equals(body.optString("error"));
+            return body.length() == 1 && code.equals(body.opt("error"));
         } catch (JSONException invalid) {
             return false;
         }

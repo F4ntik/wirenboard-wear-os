@@ -44,8 +44,10 @@ class FakeMQTT:
 
     def connect(self):
         self.connected = True
+        self.subscriptions = None
         self.on_connect(self, None, None, 0, None)
-        self.on_subscribe(self, None, 7, [0] * len(self.subscriptions), None)
+        if self.subscriptions is not None:
+            self.on_subscribe(self, None, 7, [0] * len(self.subscriptions), None)
 
     def disconnect(self):
         self.connected = False

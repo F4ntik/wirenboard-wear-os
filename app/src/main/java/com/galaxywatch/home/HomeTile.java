@@ -31,12 +31,13 @@ import androidx.wear.tiles.TileService;
 
 import com.google.common.util.concurrent.ListenableFuture;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
 
 public final class HomeTile extends TileService {
-    private static final String RESOURCES = "6";
+    private static final String RESOURCES = "8";
     private static final int TARGET_DP = 48;
     private static final int GAP_DP = 4;
     private static final int MAX_TIMED_ENTRIES = 12;
@@ -49,13 +50,16 @@ public final class HomeTile extends TileService {
     private static final String LAMP = "status-lamp";
 
     @Override protected void onTileEnterEvent(androidx.wear.tiles.EventBuilders.TileEnterEvent event) {
-        TileRead.refresh(this);
+        if (CatalogLink.paired(this)) CatalogPresentation.refresh(this);
+        else TileRead.refresh(this);
     }
 
     @Override protected ListenableFuture<Tile> onTileRequest(TileRequest request) {
         var device = request.getDeviceConfiguration();
         TileSize size = new TileSize(device.getScreenWidthDp(), device.getScreenHeightDp(),
             Math.max(1f, device.getFontScale()));
+        CatalogLink.configureBundledHome(this);
+        if (CatalogLink.paired(this)) return catalogTile(size);
         List<Rooms.Room> favorites = RoomOverview.favorites(getSharedPreferences("home", MODE_PRIVATE));
         TileRead.refresh(this);
         RoomCache.Snapshot cache = RoomCache.read(this);
@@ -68,7 +72,7 @@ public final class HomeTile extends TileService {
             if (entryCount == MAX_TIMED_ENTRIES) break;
             timeline.addTimelineEntry(new TimelineEntry.Builder()
                 .setValidity(new TimeInterval.Builder().setStartMillis(start).setEndMillis(expiry).build())
-                .setLayout(layout(size, favorites, cache.statesAt(start)))
+                .setLayout(legacyLayout(size, favorites, cache.statesAt(start)))
                 .build());
             start = expiry;
             entryCount++;
@@ -76,15 +80,48 @@ public final class HomeTile extends TileService {
         // Once the last reading expires, never return to a layout with stale light counts.
         long fallbackTime = expiries.isEmpty() ? now : expiries.last();
         timeline.addTimelineEntry(new TimelineEntry.Builder()
-            .setLayout(layout(size, favorites, cache.statesAt(fallbackTime))).build());
+            .setLayout(legacyLayout(size, favorites, cache.statesAt(fallbackTime))).build());
         return completed(new Tile.Builder().setResourcesVersion(RESOURCES)
             .setFreshnessIntervalMillis(REFRESH_INTERVAL_MS).setTileTimeline(timeline.build()).build());
     }
 
+    private ListenableFuture<Tile> catalogTile(TileSize size) {
+        CatalogPresentation.refresh(this);
+        WatchCatalog home = CatalogLink.cached(this);
+        var timeline = new Timeline.Builder();
+        if (home == null || home.rooms.isEmpty()) {
+            timeline.addTimelineEntry(new TimelineEntry.Builder().setLayout(
+                layout(size, List.of(), home == null ? "Загрузка комнат" : "Комнат пока нет")).build());
+        } else {
+            var pins = CatalogPresentation.favorites(this, home);
+            var snapshot = CatalogPresentation.readings(this, home);
+            long now = System.currentTimeMillis();
+            if (snapshot.fresh(now)) {
+                timeline.addTimelineEntry(new TimelineEntry.Builder().setValidity(new TimeInterval.Builder()
+                    .setStartMillis(now).setEndMillis(snapshot.observed() + RoomCache.FRESH_MS).build())
+                    .setLayout(catalogLayout(size, home, pins, snapshot.powers())).build());
+            }
+            timeline.addTimelineEntry(new TimelineEntry.Builder()
+                .setLayout(catalogLayout(size, home, pins, Map.of())).build());
+        }
+        return completed(new Tile.Builder().setResourcesVersion(RESOURCES)
+            .setFreshnessIntervalMillis(REFRESH_INTERVAL_MS).setTileTimeline(timeline.build()).build());
+    }
+
+    private record Card(String entry, String label, String theme, RoomOverview.Status status) {}
+
+    private Layout catalogLayout(TileSize size, WatchCatalog home, List<WatchCatalog.Room> pins,
+                                Map<String, Boolean> powers) {
+        List<Card> cards = new ArrayList<>();
+        for (WatchCatalog.Room room : pins) cards.add(new Card(CatalogPresentation.ENTRY + room.id, room.label,
+            RoomIcons.knownTheme(room.theme), CatalogPresentation.status(room, powers)));
+        return layout(size, cards, CatalogPresentation.outsideHint(home.rooms, pins, powers));
+    }
+
     @Override protected ListenableFuture<Resources> onTileResourcesRequest(ResourcesRequest request) {
         Resources.Builder resources = new Resources.Builder().setVersion(RESOURCES);
-        for (Rooms.Room room : Rooms.ALL) {
-            addIcon(resources, room.id(), RoomIcons.forRoom(room.id()).icon());
+        for (String theme : RoomIcons.THEMES) {
+            addIcon(resources, theme, RoomIcons.forRoom(theme).icon());
         }
         addIcon(resources, "blossoms", R.drawable.blossoms);
         addIcon(resources, "edge", R.drawable.edge_action);
@@ -92,7 +129,14 @@ public final class HomeTile extends TileService {
         return completed(resources.build());
     }
 
-    private Layout layout(TileSize size, List<Rooms.Room> favorites, Map<Rooms.Light, Boolean> states) {
+    private Layout legacyLayout(TileSize size, List<Rooms.Room> favorites, Map<Rooms.Light, Boolean> states) {
+        List<Card> cards = new ArrayList<>();
+        for (Rooms.Room room : favorites) cards.add(new Card(room.id(), room.label(), room.id(),
+            RoomOverview.status(room, states)));
+        return layout(size, cards, RoomOverview.outsideHint(favorites, states));
+    }
+
+    private Layout layout(TileSize size, List<Card> favorites, String hint) {
         Column.Builder content = new Column.Builder().setHeight(expand())
             .setHorizontalAlignment(HORIZONTAL_ALIGN_CENTER);
         float gridTop = size.gridTop((favorites.size() + 1) / 2);
@@ -105,17 +149,14 @@ public final class HomeTile extends TileService {
         for (int index = 0; index < favorites.size(); index += 2) {
             if (index > 0) content.addContent(verticalSpace(GAP_DP));
             Row.Builder row = new Row.Builder();
-            Rooms.Room first = favorites.get(index);
-            row.addContent(roomButton(first, RoomOverview.status(first, states), size));
+            row.addContent(roomButton(favorites.get(index), size));
             if (index + 1 < favorites.size()) {
-                Rooms.Room second = favorites.get(index + 1);
-                row.addContent(horizontalSpace(GAP_DP))
-                    .addContent(roomButton(second, RoomOverview.status(second, states), size));
+                row.addContent(horizontalSpace(GAP_DP)).addContent(roomButton(favorites.get(index + 1), size));
             }
             content.addContent(row.build());
         }
         content.addContent(new Spacer.Builder().setHeight(expand()).build())
-            .addContent(allRoomsButton(RoomOverview.outsideHint(favorites, states), size));
+            .addContent(allRoomsButton(hint, size));
 
         Box root = centeredBox().setWidth(expand()).setHeight(expand())
             .setModifiers(new Modifiers.Builder().setBackground(
@@ -124,10 +165,11 @@ public final class HomeTile extends TileService {
         return new Layout.Builder().setRoot(root).build();
     }
 
-    private Box roomButton(Rooms.Room room, RoomOverview.Status status, TileSize size) {
+    private Box roomButton(Card room, TileSize size) {
+        var status = room.status();
         boolean lit = status.on() > 0;
-        String caption = room.label().replace("-", "-\n");
-        boolean twoLines = !caption.equals(room.label());
+        String caption = room.label().replaceFirst("-", "-\n");
+        boolean twoLines = !caption.equals(room.label()) || caption.length() > 11;
         boolean showRoomIcon = !size.largeText();
         String mark = status.mark();
         Column.Builder content = new Column.Builder().setHorizontalAlignment(HORIZONTAL_ALIGN_CENTER);
@@ -135,7 +177,7 @@ public final class HomeTile extends TileService {
             Row.Builder statusRow = new Row.Builder().setVerticalAlignment(VERTICAL_ALIGN_CENTER);
             if (showRoomIcon) {
                 int iconSize = twoLines ? 15 : 19;
-                statusRow.addContent(image(room.id(), iconSize, iconSize));
+                statusRow.addContent(image(room.theme(), iconSize, iconSize));
                 if (!mark.isEmpty()) statusRow.addContent(horizontalSpace(4));
             }
             if (lit) statusRow.addContent(image(LAMP, 13, 13)).addContent(horizontalSpace(1));
@@ -150,10 +192,10 @@ public final class HomeTile extends TileService {
             : size.compact() ? 11 : 12;
         content.addContent(text(caption, labelSize, ROOM_TEXT, twoLines ? 2 : 1, FONT_WEIGHT_NORMAL));
 
-        Modifiers.Builder modifiers = navigation(room.id(), room.label() + ". " + status.description())
+        Modifiers.Builder modifiers = navigation(room.entry(), room.label() + ". " + status.description())
             .setPadding(new Padding.Builder().setStart(dp(3)).setEnd(dp(3)).build())
             .setBackground(new Background.Builder()
-                .setColor(argb(lit ? LIT_BACKGROUND : RoomIcons.forRoom(room.id()).surface()))
+                .setColor(argb(lit ? LIT_BACKGROUND : RoomIcons.forRoom(room.theme()).surface()))
                 .setCorner(new Corner.Builder().setRadius(dp(17)).build()).build());
         if (lit) modifiers.setBorder(new Border.Builder().setWidth(dp(2)).setColor(argb(GOLD)).build());
         return centeredBox().setWidth(dp(size.roomWidth())).setHeight(dp(size.roomHeight()))
@@ -168,7 +210,9 @@ public final class HomeTile extends TileService {
             .setHorizontalAlignment(HORIZONTAL_ALIGN_CENTER)
             .addContent(text(ALL_ROOMS, labelSize, TILE_BACKGROUND, 1, FONT_WEIGHT_NORMAL));
         if (!hint.isEmpty()) {
-            captions.addContent(text(hint, Math.min(9, 11 / size.fontScale()),
+            String visibleHint = size.compact() && size.largeText() && hint.equals("Ещё в кухне-гостиной")
+                ? "Кухня-гостиная" : hint;
+            captions.addContent(text(visibleHint, Math.min(9, 11 / size.fontScale()),
                 TILE_BACKGROUND, 2, FONT_WEIGHT_NORMAL));
         }
         captions.addContent(verticalSpace(hint.isEmpty() ? 8 : 13));
@@ -181,8 +225,11 @@ public final class HomeTile extends TileService {
     }
 
     private Modifiers.Builder navigation(String id, String description) {
+        boolean catalog = id.startsWith(CatalogPresentation.ENTRY)
+            || Rooms.TILE_HOME.equals(id) && CatalogLink.paired(this);
+        Class<?> activity = catalog ? CatalogTileEntryActivity.class : HomeActivity.class;
         AndroidActivity target = new AndroidActivity.Builder().setPackageName(getPackageName())
-            .setClassName(HomeActivity.class.getName())
+            .setClassName(activity.getName())
             .addKeyToExtraMapping(Rooms.EXTRA, new AndroidStringExtra.Builder().setValue(id).build())
             .build();
         return new Modifiers.Builder().setClickable(new Clickable.Builder().setId(id)

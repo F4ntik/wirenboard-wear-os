@@ -13,5 +13,5 @@ Depends: ${misc:Depends}, python3 (>= 3.9), python3-paho-mqtt, systemd (>= 247)
 Recommends: wb-mqtt-confed
 Description: local HTTP gateway for the Wiren Board Wear OS light remote
  Bridges authenticated requests from a Wear OS remote to configured
- lighting controls in the local MQTT broker. Provides an on/off switch
+ lighting controls in the local MQTT broker. Provides a room and light catalog
  in the Wiren Board configuration editor.

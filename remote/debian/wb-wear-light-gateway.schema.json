@@ -1,27 +1,370 @@
 {
   "$schema": "http://json-schema.org/draft-04/schema#",
   "type": "object",
-  "title": "Wear OS light gateway",
-  "description": "Access to lighting from Wear OS watches",
+  "title": "Wear OS light remote",
+  "description": "Choose which lights to control from your watch.",
   "configFile": {
     "path": "/etc/wb-wear-light-gateway.conf",
-    "service": "wb-wear-light-gateway"
+    "service": "wb-wear-light-gateway",
+    "fromJSON": [
+      "/usr/bin/python3",
+      "/usr/lib/wb-wear-light-gateway/catalog.py"
+    ],
+    "toJSON": [
+      "/usr/bin/python3",
+      "/usr/lib/wb-wear-light-gateway/catalog.py",
+      "--to-editor"
+    ]
   },
+  "defaultProperties": [
+    "enabled"
+  ],
   "properties": {
     "enabled": {
       "type": "boolean",
-      "title": "Enable gateway",
+      "title": "Enable the remote",
       "default": false,
-      "_format": "checkbox"
+      "_format": "checkbox",
+      "propertyOrder": 1
+    },
+    "rooms": {
+      "type": "array",
+      "title": "Rooms",
+      "_format": "tabs",
+      "maxItems": 32,
+      "default": [],
+      "propertyOrder": 2,
+      "items": {
+        "type": "object",
+        "title": "Room",
+        "headerTemplate": "{{self.label}}",
+        "additionalProperties": false,
+        "defaultProperties": [
+          "label",
+          "lights",
+          "advanced",
+          "id"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Watch label",
+            "minLength": 1,
+            "maxLength": 80,
+            "propertyOrder": 1
+          },
+          "lights": {
+            "type": "array",
+            "title": "Lights",
+            "_format": "tabs",
+            "minItems": 1,
+            "maxItems": 128,
+            "propertyOrder": 2,
+            "items": {
+              "type": "object",
+              "title": "Light",
+              "headerTemplate": "{{self.label}}",
+              "additionalProperties": false,
+              "defaultProperties": [
+                "label",
+                "power",
+                "advanced",
+                "id"
+              ],
+              "properties": {
+                "label": {
+                  "type": "string",
+                  "title": "Watch label",
+                  "minLength": 1,
+                  "maxLength": 80,
+                  "propertyOrder": 1
+                },
+                "power": {
+                  "type": "string",
+                  "title": "Switch",
+                  "description": "Choose the control that turns this light on and off.",
+                  "format": "wb-autocomplete",
+                  "pattern": "^[^/+#\\x00-\\x1f\\x7f]+/[^/+#\\x00-\\x1f\\x7f]+$",
+                  "maxLength": 238,
+                  "propertyOrder": 2,
+                  "options": {
+                    "wb": {
+                      "data": "devices"
+                    }
+                  }
+                },
+                "id": {
+                  "type": "string",
+                  "default": "",
+                  "pattern": "^[A-Za-z0-9_-]{0,48}$",
+                  "propertyOrder": 100,
+                  "options": {
+                    "hidden": true
+                  }
+                },
+                "advanced": {
+                  "type": "object",
+                  "title": "Appearance, brightness and color",
+                  "propertyOrder": 3,
+                  "additionalProperties": false,
+                  "options": {
+                    "collapsed": true,
+                    "disable_edit_json": true,
+                    "disable_properties": true
+                  },
+                  "defaultProperties": [
+                    "theme",
+                    "brightness",
+                    "color"
+                  ],
+                  "properties": {
+                    "theme": {
+                      "type": "string",
+                      "title": "Style",
+                      "enum": [
+                        "pendant",
+                        "wardrobe",
+                        "sconce",
+                        "kitchen",
+                        "entry",
+                        "track",
+                        "mirror",
+                        "shower",
+                        "plain"
+                      ],
+                      "default": "plain",
+                      "propertyOrder": 2,
+                      "options": {
+                        "enum_titles": [
+                          "Pendant",
+                          "Wardrobe",
+                          "Sconce",
+                          "Kitchen lights",
+                          "Entry",
+                          "Track lights",
+                          "Mirror",
+                          "Shower lights",
+                          "Plain light"
+                        ]
+                      }
+                    },
+                    "brightness": {
+                      "type": "string",
+                      "title": "Brightness",
+                      "description": "For dimmers, choose a control with a 0–100 range.",
+                      "format": "wb-autocomplete",
+                      "pattern": "^$|^[^/+#\\x00-\\x1f\\x7f]+/[^/+#\\x00-\\x1f\\x7f]+$",
+                      "maxLength": 238,
+                      "propertyOrder": 4,
+                      "options": {
+                        "wb": {
+                          "data": "devices"
+                        }
+                      },
+                      "default": ""
+                    },
+                    "color": {
+                      "type": "string",
+                      "title": "Color",
+                      "description": "Choose an RGB control for color lights.",
+                      "format": "wb-autocomplete",
+                      "pattern": "^$|^[^/+#\\x00-\\x1f\\x7f]+/[^/+#\\x00-\\x1f\\x7f]+$",
+                      "maxLength": 238,
+                      "propertyOrder": 5,
+                      "options": {
+                        "wb": {
+                          "data": "devices"
+                        }
+                      },
+                      "default": ""
+                    }
+                  }
+                }
+              },
+              "required": [
+                "label",
+                "power"
+              ],
+              "options": {
+                "disable_edit_json": true,
+                "disable_properties": true,
+                "disable_collapse": true
+              }
+            },
+            "options": {
+              "disable_array_delete_all_rows": true,
+              "disable_array_delete_last_row": true
+            }
+          },
+          "id": {
+            "type": "string",
+            "default": "",
+            "pattern": "^[A-Za-z0-9_-]{0,48}$",
+            "propertyOrder": 100,
+            "options": {
+              "hidden": true
+            }
+          },
+          "advanced": {
+            "type": "object",
+            "title": "Room appearance",
+            "propertyOrder": 3,
+            "additionalProperties": false,
+            "options": {
+              "collapsed": true,
+              "disable_edit_json": true,
+              "disable_properties": true
+            },
+            "defaultProperties": [
+              "theme"
+            ],
+            "properties": {
+              "theme": {
+                "type": "string",
+                "title": "Style",
+                "enum": [
+                  "living",
+                  "kitchen",
+                  "bedroom",
+                  "hall",
+                  "kids",
+                  "office",
+                  "wc",
+                  "shower",
+                  "generic"
+                ],
+                "default": "generic",
+                "propertyOrder": 2,
+                "options": {
+                  "enum_titles": [
+                    "Living room",
+                    "Kitchen",
+                    "Bedroom",
+                    "Hall",
+                    "Kids room",
+                    "Office",
+                    "Restroom",
+                    "Shower room",
+                    "Generic room"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "label",
+          "lights"
+        ],
+        "options": {
+          "disable_edit_json": true,
+          "disable_properties": true,
+          "disable_collapse": true
+        }
+      },
+      "options": {
+        "disable_array_delete_all_rows": true,
+        "disable_array_delete_last_row": true
+      }
+    },
+    "house": {
+      "type": "object",
+      "title": "Whole-home controls",
+      "propertyOrder": 3,
+      "additionalProperties": false,
+      "options": {
+        "collapsed": true,
+        "disable_edit_json": true,
+        "disable_properties": true
+      },
+      "defaultProperties": [
+        "vacation",
+        "allOff"
+      ],
+      "properties": {
+        "vacation": {
+          "type": "string",
+          "title": "Vacation mode",
+          "description": "Choose the control that reports whether vacation mode is active.",
+          "format": "wb-autocomplete",
+          "pattern": "^$|^[^/+#\\x00-\\x1f\\x7f]+/[^/+#\\x00-\\x1f\\x7f]+$",
+          "maxLength": 238,
+          "propertyOrder": 3,
+          "options": {
+            "wb": {
+              "data": "devices"
+            }
+          },
+          "default": ""
+        },
+        "allOff": {
+          "type": "string",
+          "title": "Turn off all lights",
+          "description": "Choose an existing whole-home button. Without one, the watch turns off only the lights listed here.",
+          "format": "wb-autocomplete",
+          "pattern": "^$|^[^/+#\\x00-\\x1f\\x7f]+/[^/+#\\x00-\\x1f\\x7f]+$",
+          "maxLength": 238,
+          "propertyOrder": 4,
+          "options": {
+            "wb": {
+              "data": "devices"
+            }
+          },
+          "default": ""
+        }
+      }
     }
   },
-  "required": ["enabled"],
+  "required": [
+    "enabled"
+  ],
   "additionalProperties": false,
   "translations": {
     "ru": {
-      "Wear OS light gateway": "Шлюз освещения Wear OS",
-      "Access to lighting from Wear OS watches": "Доступ к освещению с часов Wear OS",
-      "Enable gateway": "Включить шлюз"
+      "Wear OS light remote": "Шлюз освещения Wear OS",
+      "Choose which lights to control from your watch.": "Добавьте комнаты и выберите, какими светильниками управлять с часов.",
+      "Enable the remote": "Включить пульт",
+      "Room": "Комната",
+      "Lights": "Лампы",
+      "Light": "Лампа",
+      "Watch label": "На часах",
+      "Style": "Стиль",
+      "Switch": "Выключатель",
+      "Choose the control that turns this light on and off.": "Выберите канал, который включает и выключает лампу.",
+      "Brightness": "Яркость",
+      "For dimmers, choose a control with a 0–100 range.": "Для диммера выберите канал с диапазоном от 0 до 100.",
+      "Color": "Цвет",
+      "Choose an RGB control for color lights.": "Для цветной лампы выберите канал RGB.",
+      "Vacation mode": "Режим «Отпуск»",
+      "Choose the control that reports whether vacation mode is active.": "Выберите канал, который показывает, включён ли режим «Отпуск».",
+      "Turn off all lights": "Погасить весь дом",
+      "Choose an existing whole-home button. Without one, the watch turns off only the lights listed here.": "Выберите готовую общую кнопку. Без неё часы погасят только лампы из списка.",
+      "Living room": "Гостиная",
+      "Kitchen": "Кухня",
+      "Bedroom": "Спальня",
+      "Hall": "Прихожая",
+      "Kids room": "Детская",
+      "Office": "Кабинет",
+      "Restroom": "Санузел",
+      "Shower room": "Душевая",
+      "Generic room": "Обычная комната",
+      "Pendant": "Плафон",
+      "Wardrobe": "Гардероб",
+      "Sconce": "Бра",
+      "Kitchen lights": "Подсветка кухни",
+      "Entry": "Вход",
+      "Track lights": "Трековый свет",
+      "Mirror": "Зеркало",
+      "Shower lights": "Свет в душевой",
+      "Plain light": "Обычная лампа",
+      "Room appearance": "Оформление комнаты",
+      "Appearance, brightness and color": "Оформление, яркость и цвет",
+      "Rooms": "Комнаты",
+      "Whole-home controls": "Для всего дома"
     }
+  },
+  "options": {
+    "disable_edit_json": true,
+    "disable_collapse": true
   }
 }

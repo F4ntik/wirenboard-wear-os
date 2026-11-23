@@ -1,3 +1,10 @@
+wb-wear-light-gateway (0.2.0) unstable; urgency=medium
+
+  * Add a configurable room and light catalog with HTTP and local MQTT access.
+  * Preserve older integrations when upgrading the enable-only configuration.
+
+ -- F4ntik <F4ntik@users.noreply.github.com>  Mon, 23 Nov 2026 00:00:00 +0000
+
 wb-wear-light-gateway (0.1.0) unstable; urgency=medium
 
   * Package the lighting gateway and its Wiren Board configuration editor switch.

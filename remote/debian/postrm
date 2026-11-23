@@ -5,7 +5,7 @@ set -eu
 
 if [ "$1" = purge ]; then
     state=/var/lib/wb-wear-light-gateway
-    rm -f "$state/token.env"
+    rm -f "$state/token.env" /etc/wb-wear-light-gateway.conf
     if [ -d "$state" ]; then
         rmdir "$state" || true
     fi

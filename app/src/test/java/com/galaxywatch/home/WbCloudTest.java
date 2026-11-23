@@ -1,13 +1,21 @@
 package com.galaxywatch.home;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.security.cert.Certificate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+
+import javax.net.ssl.HttpsURLConnection;
 
 import org.junit.Test;
 
@@ -27,6 +35,27 @@ public class WbCloudTest {
         assertEquals(URI.create(ORIGIN + "/?grant=temporary"),
             WbCloud.tunnelUri(ORIGIN, "/?grant=temporary"));
         assertEquals(URI.create(ORIGIN + "/v1/state"), WbCloud.tunnelUri(ORIGIN, ORIGIN + "/v1/state"));
+    }
+
+    @Test public void onlyGatewayJsonNotFoundProvesV1Compatibility() throws IOException {
+        String missing = "{\"error\":\"not_found\"}";
+        assertTrue(WbCloud.isGatewayNotFound(response("application/json; charset=utf-8", missing), 404));
+        assertFalse(WbCloud.isGatewayNotFound(response("text/html", missing), 404));
+        assertFalse(WbCloud.isGatewayNotFound(response("application/json", "{\"error\":\"unknown\"}"), 404));
+        assertFalse(WbCloud.isGatewayNotFound(response("application/json", missing), 503));
+    }
+
+    private static HttpsURLConnection response(String type, String body) throws IOException {
+        return new HttpsURLConnection(URI.create(ORIGIN).toURL()) {
+            @Override public String getContentType() { return type; }
+            @Override public InputStream getErrorStream() { return new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8)); }
+            @Override public String getCipherSuite() { return null; }
+            @Override public Certificate[] getLocalCertificates() { return null; }
+            @Override public Certificate[] getServerCertificates() { return null; }
+            @Override public void disconnect() {}
+            @Override public boolean usingProxy() { return false; }
+            @Override public void connect() {}
+        };
     }
 
     @Test public void rejectsRedirectsAwayFromDesignatedService() {

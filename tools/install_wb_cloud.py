@@ -25,6 +25,9 @@ PACKAGE = "com.galaxywatch.home.sample"
 ACTIVITY = PACKAGE + "/com.galaxywatch.home.HomeActivity"
 BOOTSTRAP = "no_backup/wb-cloud.json"
 ONLINE_PREFIX = "no_backup/wb-cloud-online-"
+LAYOUT_PATH = "/v2/layout"
+STATE_PATH = "/v2/state"
+LEGACY_STATE_PATH = "/v1/state"
 
 
 class SetupError(Exception):
@@ -63,10 +66,17 @@ def document(opener, url, message, *, body=None, bearer=None):
     with exchange(opener, url, body=body, bearer=bearer) as response:
         if response.code != 200:
             raise SetupError(f"{message} (HTTP {response.code})")
-        data = response.read(65537)
-        if len(data) > 65536:
-            raise SetupError(message)
+        return response_document(response, message)
+
+
+def response_document(response, message):
+    data = response.read(65537)
+    if len(data) > 65536:
+        raise SetupError(message)
+    try:
         return json.loads(data)
+    except ValueError:
+        raise SetupError(message) from None
 
 
 def tunnel_url(origin, link, base=None):
@@ -81,11 +91,12 @@ def tunnel_url(origin, link, base=None):
     return url
 
 
-def gateway_challenge(response):
-    if response.code != 401 or response.headers.get_content_type() != "application/json":
+def gateway_error(response, status, name):
+    if response.code != status or response.headers.get_content_type() != "application/json":
         return False
     try:
-        return json.loads(response.read(512)) == {"error": "unauthorized"}
+        data = response.read(513)
+        return len(data) <= 512 and json.loads(data, object_pairs_hook=list) == [("error", name)]
     except (ValueError, UnicodeError):
         return False
 
@@ -97,14 +108,65 @@ def open_service(transport, origin, signed_link, cookie_jar):
             if 300 <= response.code < 400 and response.headers.get("Location"):
                 url = tunnel_url(origin, response.headers["Location"], url)
             else:
-                target = urllib.request.Request(origin + "/v1/state")
+                target = urllib.request.Request(origin + LAYOUT_PATH)
                 cookie_jar.add_cookie_header(target)
-                gateway_response = (response.code in (200, 404)
-                                    and response.headers.get_content_type() == "application/json")
-                if target.has_header("Cookie") and (gateway_response or gateway_challenge(response)):
+                if target.has_header("Cookie") and (
+                    response.code == 200 and response.headers.get_content_type() == "application/json"
+                    or gateway_error(response, 401, "unauthorized") or gateway_error(response, 404, "not_found")
+                ):
                     return
                 raise SetupError(f"Сервис на контроллере недоступен (HTTP {response.code})")
     raise SetupError("WB Cloud не завершил подключение к сервису")
+
+
+def layout_identity(layout, serial):
+    invalid = "Шлюз вернул неверную схему дома"
+    if not isinstance(layout, dict) or type(layout.get("schema")) is not int or layout["schema"] != 1:
+        raise SetupError(invalid)
+    controller, revision, rooms = (layout.get(key) for key in ("controller", "revision", "rooms"))
+    if not isinstance(controller, str) or not re.fullmatch(r"[A-Za-z0-9]{6,32}", controller):
+        raise SetupError(invalid)
+    if controller.lower() != serial.lower():
+        raise SetupError("Схема дома принадлежит другому контроллеру")
+    if (not isinstance(revision, str) or not re.fullmatch(r"[a-f0-9]{64}", revision)
+            or not isinstance(rooms, list) or len(rooms) > 32):
+        raise SetupError(invalid)
+    identities = set()
+    for room in rooms:
+        lights = room.get("lights") if isinstance(room, dict) else None
+        if not isinstance(lights, list) or not lights or len(identities) + len(lights) > 128:
+            raise SetupError(invalid)
+        for light in lights:
+            identity = light.get("id") if isinstance(light, dict) else None
+            if (not isinstance(identity, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,48}", identity)
+                    or identity in identities):
+                raise SetupError(invalid)
+            identities.add(identity)
+    return revision, identities
+
+
+def prove_gateway(service, origin, serial, key):
+    message = "Шлюз не ответил на проверку схемы дома"
+    with exchange(service, origin + LAYOUT_PATH, bearer=key) as response:
+        legacy = gateway_error(response, 404, "not_found")
+        if response.code != 200 and not legacy:
+            raise SetupError(f"{message} (HTTP {response.code})")
+        layout = None if legacy else response_document(response, message)
+    message = "Шлюз не ответил на проверку состояния"
+    if legacy:
+        state = document(service, origin + LEGACY_STATE_PATH, message, bearer=key)
+        if not isinstance(state, dict) or "vacation" not in state or not isinstance(state.get("lights"), dict) or not state["lights"]:
+            raise SetupError("Шлюз вернул неверное состояние")
+        return
+    revision, identities = layout_identity(layout, serial)
+    state = document(service, origin + STATE_PATH, message, bearer=key)
+    if not isinstance(state, dict) or state.get("revision") != revision:
+        raise SetupError("Схема дома изменилась во время проверки. Повторите привязку")
+    lights = state.get("lights")
+    if not isinstance(lights, dict) or lights.keys() - identities or type(state.get("vacation")) is not bool:
+        raise SetupError("Шлюз пока не подтвердил состояние дома")
+    if identities and not any(isinstance(light, dict) and type(light.get("power")) is bool for light in lights.values()):
+        raise SetupError("Шлюз пока не подтвердил состояние ни одной лампы")
 
 
 def choose_controller(opener, access, preferred, prompt=None):
@@ -393,9 +455,7 @@ def prepare_profile(args, login_prompt=None, *, controller_prompt=None, pair_pro
     key = document(service, origin + "/v1/pair", "Шлюз не принял код привязки", body={"code": code})["token"]
     if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", key):
         raise SetupError("Шлюз вернул неверный ключ")
-    state = document(service, origin + "/v1/state", "Шлюз не ответил на проверку состояния", bearer=key)
-    if "vacation" not in state or not isinstance(state.get("lights"), dict) or not state["lights"]:
-        raise SetupError("Шлюз вернул неверное состояние")
+    prove_gateway(service, origin, serial, key)
     return {"serial": serial, "port": args.port, "refresh": refresh, "gatewayKey": key, "installId": uuid.uuid4().hex}
 
 
@@ -438,6 +498,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("apk", type=Path, nargs="?")
     modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--app-only", action="store_true", help="установить APK с сохранением настроек часов")
     modes.add_argument("--prepare", action="store_true", help="сохранить доступ в Windows до появления часов")
     modes.add_argument("--install-prepared", action="store_true", help="установить с ранее сохранённым доступом")
     parser.add_argument("--replace-prepared", action="store_true", help="явно заменить сохранённый доступ после проверки")
@@ -464,6 +525,10 @@ def main():
 
     watch = args.watch or select_watch()
     commands = ["adb", "-s", watch]
+    if args.app_only:
+        install(commands, args.apk)
+        print("Приложение установлено. Откройте «Дом» на часах. Настройки прежней установки сохранены.")
+        return
     if args.install_prepared:
         install_prepared(commands, args.apk)
     else:

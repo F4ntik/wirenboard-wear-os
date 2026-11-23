@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hmac
-import json
+import logging
 import os
 import re
 import secrets
@@ -16,6 +16,11 @@ from pathlib import Path
 from threading import BoundedSemaphore, Condition, Lock, Timer
 
 from paho.mqtt import client as mqtt
+
+from catalog import (
+    CATALOG_TOPIC, MAX_CATALOG, REVISION_TOPIC, SERIAL_FILE, SERIAL_TOPIC, ApiError, Catalog,
+    decode_json, decode_state, read_serial, read_settings, valid_metadata, wire_json,
+)
 
 
 LIGHTS = {
@@ -31,20 +36,6 @@ MAX_BODY = 512
 REQUEST_SECONDS = 8
 PAIRING_SECONDS = 300
 PAIRING_ATTEMPTS = 8
-
-
-class ApiError(Exception):
-    def __init__(self, status, code):
-        super().__init__(code)
-        self.status = status
-        self.code = code
-
-
-def unique_keys(pairs):
-    result = dict(pairs)
-    if len(result) != len(pairs):
-        raise ValueError("duplicate JSON key")
-    return result
 
 
 def parse_command(command):
@@ -83,18 +74,26 @@ class Pairing:
 
 
 class Controller:
-    def __init__(self, client, timeout=3):
+    def __init__(self, client, timeout=3, *, catalog=None, legacy=True):
         self.client = client
         self.timeout = timeout
+        self.catalog = catalog
+        self.legacy = legacy
         self.changed = Condition()
         self.command_lock = Lock()
         self.generation = 0
-        self.ready = False
-        self.subscription = None
-        self.vacation = None
-        self.vacation_updated = False
-        self.lights = dict.fromkeys(LIGHTS)
-        self.updates = dict.fromkeys(LIGHTS, 0)
+        self.session = 0
+        self.closing = False
+        self.controls = {**dict.fromkeys(STATE_TOPICS, "power"), VACATION: "vacation"} if legacy else {}
+        self.catalog_metadata = {}
+        if catalog is not None and catalog.serial is not None:
+            self.controls = {topic: kind for topic, kind in catalog.controls.items() if kind != "allOff"}
+            self.catalog_metadata = {topic + "/meta": (topic, kind) for topic, kind in catalog.controls.items()}
+        self.subscriptions = [(topic, 0) for topic in (*self.controls, *self.catalog_metadata)]
+        if catalog is not None and catalog.serial is not None:
+            self.subscriptions.append((SERIAL_TOPIC, 0))
+        with self.changed:
+            self.reset()
         client.on_connect = self.on_connect
         client.on_disconnect = self.on_disconnect
         client.on_subscribe = self.on_subscribe
@@ -102,19 +101,23 @@ class Controller:
 
     def reset(self):
         self.generation += 1
+        self.session += 1
         self.ready = False
         self.subscription = None
-        self.vacation = None
-        self.vacation_updated = False
-        self.lights = dict.fromkeys(LIGHTS)
-        self.updates = dict.fromkeys(LIGHTS, 0)
+        self.serial_verified = False
+        self.catalog_valid = False
+        self.advertised = False
+        self.values = dict.fromkeys(self.controls)
+        self.updates = dict.fromkeys(self.controls, 0)
+        self.metadata = set()
+        self.live_identity = set()
         self.changed.notify_all()
 
     def on_connect(self, client, _data, _flags, reason, _properties=None):
         with self.changed:
             self.reset()
-            if reason == 0:
-                result, message_id = client.subscribe(SUBSCRIPTIONS)
+            if reason == 0 and self.subscriptions and not self.closing:
+                result, message_id = client.subscribe(self.subscriptions)
                 if result == mqtt.MQTT_ERR_SUCCESS:
                     self.subscription = message_id
 
@@ -125,57 +128,133 @@ class Controller:
     def on_subscribe(self, _client, _data, message_id, reasons, _properties=None):
         with self.changed:
             if message_id == self.subscription:
-                self.ready = len(reasons) == len(SUBSCRIPTIONS) and all(
+                self.ready = len(reasons) == len(self.subscriptions) and all(
                     reason in (0, 1, 2) for reason in reasons)
+                self.sync_catalog()
+                self.changed.notify_all()
 
     def on_message(self, _client, _data, message):
-        value = {b"0": False, b"1": True}.get(message.payload)
+        topic, payload = message.topic, message.payload
         with self.changed:
-            if message.topic == VACATION:
-                if message.retain and self.vacation_updated:
+            if topic in self.controls:
+                if message.retain and self.updates[topic]:
                     return
-                self.vacation = value
-                self.vacation_updated = not message.retain
-            elif message.topic in STATE_TOPICS:
-                light = STATE_TOPICS[message.topic]
-                if message.retain and self.updates[light]:
-                    return
-                self.lights[light] = value
+                self.values[topic] = decode_state(self.controls[topic], payload)
                 if not message.retain:
-                    self.updates[light] += 1
+                    self.updates[topic] += 1
+            elif topic == SERIAL_TOPIC or topic in self.catalog_metadata:
+                if message.retain and topic in self.live_identity:
+                    return
+                if not message.retain:
+                    self.live_identity.add(topic)
+                if topic == SERIAL_TOPIC:
+                    if self.catalog is None or self.catalog.serial is None:
+                        return
+                    self.serial_verified = payload.strip().lower() == self.catalog.serial.lower().encode("ascii")
+                    if not self.serial_verified:
+                        logging.warning("Серийный номер MQTT не совпадает с номером контроллера")
+                else:
+                    control, kind = self.catalog_metadata[topic]
+                    try:
+                        meta = decode_json(payload) if len(payload) <= 8192 else None
+                    except (ValueError, RecursionError):
+                        meta = None
+                    if valid_metadata(kind, meta):
+                        self.metadata.add(control)
+                    else:
+                        self.metadata.discard(control)
+                        logging.warning("Канал %s не соответствует настройке %s", control, kind)
+                self.sync_catalog()
             self.changed.notify_all()
 
-    def snapshot(self):
-        return {"vacation": self.vacation, "lights": self.lights.copy()}
+    def sync_catalog(self):
+        if self.catalog is None or self.closing:
+            return
+        valid = self.ready and self.serial_verified and len(self.metadata) == len(self.catalog.controls)
+        if valid != self.catalog_valid:
+            self.catalog_valid = valid
+            self.generation += 1
+        if valid and not self.advertised:
+            packet = self.client.publish(CATALOG_TOPIC, self.catalog.body, qos=0, retain=True)
+            if packet.rc == mqtt.MQTT_ERR_SUCCESS:
+                revision = self.client.publish(REVISION_TOPIC, self.catalog.revision, qos=0, retain=True)
+                self.advertised = revision.rc == mqtt.MQTT_ERR_SUCCESS
+        elif not valid and self.advertised:
+            self.clear_catalog()
 
-    def state(self):
+    def clear_catalog(self):
+        self.advertised = False
+        return [self.client.publish(topic, b"", qos=0, retain=True) for topic in (REVISION_TOPIC, CATALOG_TOPIC)]
+
+    def close(self):
         with self.changed:
-            if not self.ready or not self.client.is_connected():
-                raise ApiError(503, "controller_unavailable")
+            self.closing = True
+            self.generation += 1
+            self.changed.notify_all()
+            if not self.advertised or not self.client.is_connected():
+                return
+            packets = self.clear_catalog()
+        for packet in packets:
+            try:
+                packet.wait_for_publish(timeout=0.5)
+            except RuntimeError:
+                break
+
+    def snapshot(self):
+        if self.legacy:
+            return {"vacation": self.values[VACATION],
+                    "lights": {identity: self.values[topic] for identity, topic in LIGHTS.items()}}
+        return {"revision": self.catalog.revision,
+                "vacation": self.values[self.catalog.vacation] if self.catalog.vacation else False,
+                "lights": {identity: {kind: self.values[light[kind]] for kind in ("power", "brightness", "color")
+                                      if kind in light} for identity, light in self.catalog.lights.items()}}
+
+    def check_available(self, *, v2=False):
+        if self.legacy == v2:
+            raise ApiError(404, "not_found")
+        if self.closing or not self.ready or not self.client.is_connected():
+            raise ApiError(503, "controller_unavailable")
+        if v2 and not self.catalog_valid:
+            raise ApiError(503, "catalog_unavailable")
+
+    def state(self, *, v2=False):
+        with self.changed:
+            self.check_available(v2=v2)
             return self.snapshot()
 
-    def command(self, targets):
+    def layout(self):
+        with self.changed:
+            self.check_available(v2=True)
+            return self.catalog.layout
+
+    def command(self, request, *, v2=False):
         if not self.command_lock.acquire(blocking=False):
             raise ApiError(409, "command_in_progress")
         try:
             with self.changed:
-                return self.confirm_command(targets)
+                self.check_available(v2=v2)
+                if v2:
+                    targets, master = self.catalog.command(request)
+                    vacation = self.catalog.vacation
+                else:
+                    selected = dict.fromkeys(LIGHTS, False) if request is None else request
+                    targets = {LIGHTS[identity]: value for identity, value in selected.items()}
+                    master = ALL_OFF.removesuffix("/on") if request is None else None
+                    vacation = VACATION
+                if vacation is not None and self.values[vacation] is not False:
+                    raise ApiError(403, "vacation_active_or_unknown")
+                return self.confirm_command(targets, master)
         finally:
             self.command_lock.release()
 
-    def confirm_command(self, targets):
-        self.state()
-        if self.vacation is not False:
-            raise ApiError(403, "vacation_active_or_unknown")
-
-        all_off = targets is None
-        targets = dict.fromkeys(LIGHTS, False) if all_off else targets
-        pending = {light: self.updates[light] for light, value in targets.items()
-                   if self.lights[light] is not value}
-        publications = [(ALL_OFF, "1")] if all_off else [
-            (LIGHTS[light] + "/on", "1" if targets[light] else "0") for light in pending
+    def confirm_command(self, targets, master):
+        pending = {topic: self.updates[topic] for topic, value in targets.items() if self.values[topic] != value}
+        publications = [(master + "/on", "1")] if master else [
+            (topic + "/on", str(int(targets[topic])) if type(targets[topic]) is bool else str(targets[topic]))
+            for topic in pending
         ]
         generation = self.generation
+        session = self.session
         deadline = time.monotonic() + self.timeout
         packets = []
         for topic, value in publications:
@@ -189,15 +268,16 @@ class Controller:
 
         while self.generation == generation and self.client.is_connected():
             sent = len(packets) == len(publications) and all(self.was_sent(packet) for packet in packets)
-            received = all(self.updates[light] > update for light, update in pending.items())
-            matches = all(self.lights[light] is value for light, value in targets.items())
+            received = all(self.updates[topic] > update for topic, update in pending.items())
+            matches = all(self.values[topic] == value for topic, value in targets.items())
             if sent and received and matches:
                 return self.snapshot()
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                self.drop_unsent(packets)
                 break
             self.changed.wait(min(remaining, 0.05))
+        if self.session == session:
+            self.drop_unsent(packets)
         raise ApiError(504, "unconfirmed")
 
     @staticmethod
@@ -242,11 +322,16 @@ class GatewayHandler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        self.respond("/v1/state", self.server.controller.state)
+        controller = self.server.controller
+        routes = {"/v1/state": controller.state, "/v2/layout": controller.layout,
+                  "/v2/state": lambda: controller.state(v2=True)}
+        self.respond(self.path, routes.get(self.path))
 
     def do_POST(self):
         if self.path == "/v1/pair":
             self.respond("/v1/pair", self.handle_pairing, authorize=False)
+        elif self.path == "/v2/command":
+            self.respond("/v2/command", lambda: self.handle_command(v2=True))
         else:
             self.respond("/v1/lights", self.handle_command)
 
@@ -257,7 +342,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 if len(credentials) != 1 or not hmac.compare_digest(
                         credentials[0].encode("latin-1"), self.server.authorization):
                     raise ApiError(401, "unauthorized")
-            if self.path != path:
+            if self.path != path or action is None:
                 raise ApiError(404, "not_found")
             status, payload = 200, action()
         except ApiError as error:
@@ -265,7 +350,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         except TimeoutError:
             status, payload = 408, {"error": "request_timeout"}
 
-        body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        body = wire_json(payload)
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -276,12 +361,13 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def handle_command(self):
-        command = parse_command(self.read_json("invalid_command"))
+    def handle_command(self, *, v2=False):
+        request = self.read_json("invalid_command", limit=MAX_CATALOG if v2 else MAX_BODY)
+        command = request if v2 else parse_command(request)
         controller = self.server.controller
         if time.monotonic() + controller.timeout >= self.request_deadline:
             raise ApiError(408, "request_timeout")
-        return controller.command(command)
+        return controller.command(command, v2=v2)
 
     def handle_pairing(self):
         pairing = self.server.pairing
@@ -296,7 +382,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         pairing.redeem(code)
         return {"token": self.server.token}
 
-    def read_json(self, invalid_code):
+    def read_json(self, invalid_code, *, limit=MAX_BODY):
         lengths = self.headers.get_all("Content-Length", [])
         if "Transfer-Encoding" in self.headers or len(lengths) != 1:
             raise ApiError(400, "invalid_length")
@@ -304,7 +390,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if re.fullmatch(r"[0-9]{1,10}", length) is None or int(length) == 0:
             raise ApiError(400, "invalid_length")
         length = int(length)
-        if length > MAX_BODY:
+        if length > limit:
             raise ApiError(413, "body_too_large")
         if self.headers.get_content_type() != "application/json":
             raise ApiError(415, "expected_json")
@@ -314,8 +400,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if time.monotonic() >= self.request_deadline:
             raise ApiError(408, "request_timeout")
         try:
-            return json.loads(body.decode("utf-8"), object_pairs_hook=unique_keys)
-        except ValueError:
+            return decode_json(body)
+        except (ValueError, RecursionError):
             raise ApiError(400, invalid_code) from None
 
 
@@ -355,16 +441,22 @@ def main():
     parser.add_argument("--pair-once", action="store_true", help="выдать одноразовый код для часов")
     parser.add_argument("--switch-config", type=Path, help="файл настроек конфигуратора Wiren Board")
     parser.add_argument("--pair-code-file", type=Path, help="файл кода, выдаваемого по сигналу SIGUSR1")
+    parser.add_argument("--controller-serial-file", type=Path, default=SERIAL_FILE, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    catalog = None
+    legacy = True
     if args.switch_config:
         try:
-            settings = json.loads(args.switch_config.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            parser.error("cannot read gateway configuration")
-        if not isinstance(settings, dict) or type(settings.get("enabled")) is not bool:
-            parser.error("gateway configuration requires a boolean enabled setting")
-        if not settings["enabled"]:
-            return
+            settings = read_settings(args.switch_config)
+            if not settings["enabled"]:
+                return
+            legacy = "rooms" not in settings
+            if not legacy:
+                catalog = Catalog(settings, read_serial(args.controller_serial_file))
+                if catalog.serial is None:
+                    logging.warning("Каталог недоступен: не удалось прочитать серийный номер контроллера")
+        except (OSError, ValueError, RecursionError) as error:
+            parser.error(f"invalid gateway configuration: {error}")
     if args.pair_code_file and not hasattr(signal, "SIGUSR1"):
         parser.error("--pair-code-file requires SIGUSR1")
     key = os.environ.get("WB_GATEWAY_TOKEN", "")
@@ -388,7 +480,9 @@ def main():
         client = mqtt.Client(clean_session=True)
     if username:
         client.username_pw_set(username, password)
-    controller = Controller(client)
+    if catalog is not None and catalog.serial is not None:
+        client.will_set(REVISION_TOPIC, b"", qos=0, retain=True)
+    controller = Controller(client, catalog=catalog, legacy=legacy)
     client.connect_async(host, port, keepalive=10)
     with Gateway(args.port, controller, key) as server:
         def issue_code(*_signal):
@@ -403,12 +497,17 @@ def main():
             signal.signal(signal.SIGUSR1, issue_code)
         if args.pair_once:
             issue_code()
+        def stop_service(*_signal):
+            raise KeyboardInterrupt
+
+        signal.signal(signal.SIGTERM, stop_service)
         client.loop_start()
         try:
             server.serve_forever()
         except KeyboardInterrupt:
             pass
         finally:
+            controller.close()
             client.disconnect()
             client.loop_stop()
 

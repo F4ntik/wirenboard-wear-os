@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.URI;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Collection;
 import java.util.HashMap;
@@ -176,6 +177,10 @@ final class RemoteRoom implements HomeLink {
     }
 
     static JSONObject exchange(HttpsURLConnection request, JSONObject body) throws IOException, JSONException {
+        return new JSONObject(exchangeBody(request, body, 8192));
+    }
+
+    static String exchangeBody(HttpsURLConnection request, JSONObject body, int maxResponseBytes) throws IOException {
         if (body != null) {
             byte[] json = body.toString().getBytes(StandardCharsets.UTF_8);
             request.setRequestMethod("POST");
@@ -189,7 +194,7 @@ final class RemoteRoom implements HomeLink {
         int status = request.getResponseCode();
         if (status != 200) throw new HttpFailure(status);
         try (InputStream input = request.getInputStream()) {
-            return new JSONObject(readResponse(input, 8192));
+            return readResponse(input, maxResponseBytes);
         }
     }
 
@@ -200,7 +205,7 @@ final class RemoteRoom implements HomeLink {
             if (output.size() + count > limit) throw new IOException("Response exceeds protocol limit");
             output.write(buffer, 0, count);
         }
-        return new String(output.toByteArray(), StandardCharsets.UTF_8);
+        return StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(output.toByteArray())).toString();
     }
 
     private static Boolean binary(Object value) throws JSONException {
