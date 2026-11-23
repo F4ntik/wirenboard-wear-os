@@ -4,7 +4,7 @@
 
 ## Пакет для контроллера Wiren Board
 
-В [выпуске 0.6.2](https://github.com/F4ntik/wirenboard-wear-os/releases/tag/v0.6.2) лежат готовый пакет `wb-wear-light-gateway_0.1.0_all.deb` для учебной карты и архив `wirenboard-wear-os-0.6.2-windows.zip` с APK и программой привязки. Если проверяете саму интеграцию на стенде с учебной картой, можно сразу перейти к установке пакета. Для домашней схемы укажите свои каналы в `gateway.py`, согласуйте их с приложением часов и соберите пакет на Debian 11 или новее.
+В [выпуске 0.6.3](https://github.com/F4ntik/wirenboard-wear-os/releases/tag/v0.6.3) лежат готовый пакет `wb-wear-light-gateway_0.1.0_all.deb` для учебной карты и архив `wirenboard-wear-os-0.6.3-windows.zip` с APK и программой привязки. Если проверяете саму интеграцию на стенде с учебной картой, можно сразу перейти к установке пакета. Для домашней схемы укажите свои каналы в `gateway.py`, согласуйте их с приложением часов и соберите пакет на Debian 11 или новее.
 
 ```sh
 sudo apt install build-essential debhelper dpkg-dev

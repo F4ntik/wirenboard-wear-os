@@ -1,11 +1,14 @@
 package com.galaxywatch.home;
 
+import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.graphics.Typeface;
+import android.graphics.drawable.Animatable;
 import android.graphics.drawable.Drawable;
+import android.graphics.drawable.InsetDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.LayerDrawable;
 import android.graphics.drawable.RippleDrawable;
@@ -33,6 +36,7 @@ import androidx.wear.widget.SwipeDismissFrameLayout;
 
 import java.io.IOException;
 import java.security.GeneralSecurityException;
+import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.List;
@@ -50,7 +54,9 @@ public final class HomeActivity extends Activity {
     private static final int TEXT = 0xFFFFF1F2;
     private static final int MUTED = 0xFFCEBFCA;
     private static final int PETAL = 0xFFFFD9E5;
-    private static final int PLUM = 0xFF593448;
+    private static final int LIT_SURFACE = 0xFF674423;
+    private static final int LIT_OUTLINE = 0xFFFFD06B;
+    private static final int LIT_TEXT = 0xFFFFF3DC;
     private static final int ROSE = 0xFFEDBED0;
     private static final int AMBER = 0xFFFFD3A1;
     private static final long FIRST_RETRY_MS = 1000;
@@ -137,6 +143,14 @@ public final class HomeActivity extends Activity {
         else connectRoom();
     }
 
+    @Override public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        for (Button button : controls.values()) {
+            if (hasFocus) startLightAnimation(button);
+            else stopLightAnimation(button);
+        }
+    }
+
     @Override protected void onStop() {
         screenActive = false;
         main.removeCallbacks(verificationTimeout);
@@ -216,8 +230,8 @@ public final class HomeActivity extends Activity {
         for (Rooms.Light light : selected.lights()) {
             Button button = addButton(light.label(), () -> changeLight(light));
             button.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
-            button.setClipToOutline(light.artwork() != 0);
-            button.setPaddingRelative(dp(12), dp(4), dp(12), dp(4));
+            button.setClipToOutline(true);
+            button.setPaddingRelative(dp(10), dp(4), dp(10), dp(4));
             controls.put(light, button);
         }
         groupOff = addEdgeAction(this::switchOff);
@@ -649,6 +663,7 @@ public final class HomeActivity extends Activity {
     }
 
     private void stopRoom() {
+        for (Button button : controls.values()) stopLightAnimation(button);
         routes = new RoutePlan();
         main.removeCallbacks(reconnect);
         retryDelay = FIRST_RETRY_MS;
@@ -866,17 +881,15 @@ public final class HomeActivity extends Activity {
                 icon = R.drawable.ic_light_unknown;
                 state = R.string.light_state_unknown;
             } else {
-                icon = lit ? R.drawable.ic_light_on : R.drawable.ic_light;
+                icon = lit ? R.drawable.ic_light_glow : R.drawable.ic_light;
                 state = lit ? R.string.light_state_on : R.string.light_state_off;
             }
             button.setEnabled(canChangeLight(light));
             CharSequence description = getText(state);
             if (description.equals(button.getStateDescription())) continue;
-            int surface = lit ? PLUM : SURFACE;
-            button.setBackground(light.artwork() == 0 ? buttonBackground(surface) : illustratedBackground(surface, light.artwork()));
-            button.setTextColor(lit ? PETAL : TEXT);
-            setIcon(button, icon, false);
-            button.setCompoundDrawableTintList(ColorStateList.valueOf(lit ? PETAL : MUTED));
+            button.setBackground(lightBackground(light.artwork(), lit));
+            button.setTextColor(lit ? LIT_TEXT : TEXT);
+            setLightIcon(button, icon, lit);
             button.setStateDescription(description);
         }
         String offLabel = "Погасить всё";
@@ -1006,6 +1019,29 @@ public final class HomeActivity extends Activity {
         button.setCompoundDrawableTintList(above ? null : button.getTextColors());
     }
 
+    private void startLightAnimation(Button button) {
+        if (screenActive && hasWindowFocus() && button.isShown() && ValueAnimator.areAnimatorsEnabled()
+            && button.getCompoundDrawablesRelative()[0] instanceof Animatable animation && !animation.isRunning()) {
+            animation.start();
+        }
+    }
+
+    private void stopLightAnimation(Button button) {
+        if (button.getCompoundDrawablesRelative()[0] instanceof Animatable animation) animation.stop();
+    }
+
+    private void setLightIcon(Button button, int iconId, boolean lit) {
+        stopLightAnimation(button);
+        Drawable icon = getDrawable(iconId).mutate();
+        if (!lit) icon = new InsetDrawable(icon, dp(3));
+        button.setCompoundDrawableTintList(lit ? null : ColorStateList.valueOf(MUTED));
+        int size = dp(27);
+        icon.setBounds(0, 0, size, size);
+        button.setCompoundDrawablesRelative(icon, null, null, null);
+        button.setCompoundDrawablePadding(dp(5));
+        if (lit) startLightAnimation(button);
+    }
+
     private Button button(String label, Runnable action) {
         Button button = new Button(this);
         button.setText(label);
@@ -1022,14 +1058,27 @@ public final class HomeActivity extends Activity {
         return button;
     }
 
-    private RippleDrawable illustratedBackground(int surface, int artwork) {
+    private RippleDrawable lightBackground(int artwork, boolean lit) {
+        int surface = lit ? LIT_SURFACE : SURFACE;
         GradientDrawable pill = new GradientDrawable();
         pill.setColor(surface);
         pill.setCornerRadius(dp(24));
-        int translucent = (surface & 0x00FFFFFF) | 0x20000000;
-        GradientDrawable shade = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
-            new int[]{surface, surface, translucent});
-        LayerDrawable layers = new LayerDrawable(new Drawable[]{pill, getDrawable(artwork), shade});
+        List<Drawable> content = new ArrayList<>();
+        content.add(pill);
+        if (artwork != 0) {
+            content.add(getDrawable(artwork));
+            int translucent = (surface & 0x00FFFFFF) | 0x20000000;
+            content.add(new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
+                new int[]{surface, surface, translucent}));
+        }
+        if (lit) {
+            GradientDrawable outline = new GradientDrawable();
+            outline.setColor(android.graphics.Color.TRANSPARENT);
+            outline.setCornerRadius(dp(24));
+            outline.setStroke(dp(2.25f), LIT_OUTLINE);
+            content.add(outline);
+        }
+        LayerDrawable layers = new LayerDrawable(content.toArray(new Drawable[0]));
         layers.setPaddingMode(LayerDrawable.PADDING_MODE_STACK);
         return new RippleDrawable(ColorStateList.valueOf(0x28FFFFFF), layers, null);
     }
