@@ -4,18 +4,7 @@
 
 ## Пакет для контроллера Wiren Board
 
-Версия `0.2.0` получает комнаты и светильники из веб-интерфейса Wiren Board. Готовый пакет можно скачать из [выпуска 0.8.0](https://github.com/F4ntik/wirenboard-wear-os/releases/tag/v0.8.0). Для самостоятельной сборки подойдёт Debian 11 или новее.
-
-```sh
-sudo apt install build-essential debhelper dpkg-dev
-cd remote
-chmod 0644 debian/*
-chmod 0755 debian/rules debian/postinst debian/postrm
-dpkg-buildpackage -b -us -uc
-cd ..
-```
-
-Скопируйте `wb-wear-light-gateway_0.2.0_all.deb` на контроллер и установите его в терминале.
+Скачайте [пакет для Wiren Board (.deb)](https://github.com/F4ntik/wirenboard-wear-os/releases/download/v0.8.0/wb-wear-light-gateway_0.2.0_all.deb) и скопируйте файл на контроллер, например через файловый менеджер WB Cloud. В терминале **контроллера** перейдите в папку с файлом и выполните команду от имени администратора. Если вы вошли как `root`, можно опустить `sudo`.
 
 ```sh
 sudo apt install ./wb-wear-light-gateway_0.2.0_all.deb
@@ -67,6 +56,19 @@ python tools/install_wb_cloud.py --prepare
 При первичной привязке установщик дожидается чтения через WB Cloud даже дома. После этого при наличии локального адреса часы одновременно проверяют оба подключения и используют первое, которое подтвердило состояния дома. Вручную закрепить один канал можно в меню «Настройки → Подключение».
 
 Выключатель в интеграциях WB останавливает шлюз, закрывает порт и отзывает опубликованный каталог. Локальный режим подключается прямо к MQTT. Для управления по каталогу часы сверяют серийный номер контроллера и ревизию схемы.
+
+## Сборка пакета из исходников
+
+На компьютере с Debian 11 или новее выполните команды из корня репозитория. Готовый файл `wb-wear-light-gateway_0.2.0_all.deb` появится рядом с каталогом `remote`.
+
+```sh
+sudo apt install build-essential debhelper dpkg-dev
+cd remote
+chmod 0644 debian/*
+chmod 0755 debian/rules debian/postinst debian/postrm
+dpkg-buildpackage -b -us -uc
+cd ..
+```
 
 ## Локальный запуск
 
