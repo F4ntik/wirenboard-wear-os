@@ -70,7 +70,6 @@ public final class HomeActivity extends Activity {
     private final Map<Route, Attempt> attempts = new EnumMap<>(Route.class);
     private Route route;
     private final Map<Rooms.Light, Boolean> states = new HashMap<>();
-    private final Map<Rooms.Light, Boolean> demoStates = new HashMap<>();
     private record Command(boolean target, View feedback) {}
 
     private final Map<Rooms.Light, Command> pending = new HashMap<>();
@@ -79,7 +78,13 @@ public final class HomeActivity extends Activity {
     private SharedPreferences settings;
     private Rooms.Room room;
     private HomeLink connection;
-    private static WbCloud cloud;
+    private String sessionScope;
+    private final Map<Rooms.Light, Boolean> readingsToSave = new HashMap<>();
+    private final Runnable saveReadings = this::flushReadings;
+    private boolean onlyLit;
+    private RoomGrid roomGrid;
+    private Button filterButton;
+    private Runnable settingsBack;
     private Boolean vacation;
     private boolean online;
     private boolean connecting;
@@ -109,9 +114,10 @@ public final class HomeActivity extends Activity {
     @Override protected void onCreate(Bundle saved) {
         super.onCreate(saved);
         settings = getSharedPreferences("home", MODE_PRIVATE);
+        onlyLit = saved != null && saved.getBoolean("only_lit");
         String setupError = WbCloud.importProfile(this, settings);
         installerCheck = getIntent().getBooleanExtra(CHECK_CLOUD, false) || settings.getBoolean(WbCloud.VERIFY, false);
-        demo = settings.getBoolean("demo", true);
+        demo = settings.getBoolean("demo", HomeConnections.DEFAULT_DEMO);
         String roomId = saved == null ? getIntent().getStringExtra(Rooms.EXTRA) : saved.getString(Rooms.EXTRA);
         Rooms.Room selected = Rooms.find(roomId);
         fromTile = selected != null && (saved == null || saved.getBoolean(FROM_TILE));
@@ -127,6 +133,7 @@ public final class HomeActivity extends Activity {
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        onlyLit = false;
         installerCheck = intent.getBooleanExtra(CHECK_CLOUD, false);
         String entry = intent.getStringExtra(Rooms.EXTRA);
         Rooms.Room selected = Rooms.find(entry);
@@ -161,6 +168,7 @@ public final class HomeActivity extends Activity {
     @Override protected void onSaveInstanceState(Bundle out) {
         super.onSaveInstanceState(out);
         if (room != null) out.putString(Rooms.EXTRA, room.id());
+        out.putBoolean("only_lit", onlyLit);
         out.putBoolean(FROM_TILE, fromTile);
         out.putBoolean(HOME_FROM_TILE, homeFromTile);
     }
@@ -168,6 +176,7 @@ public final class HomeActivity extends Activity {
     @Override public void onBackPressed() {
         if (room != null) backToRooms();
         else if (remoteSettingsVisible) showSettings();
+        else if (settingsVisible && settingsBack != null) settingsBack.run();
         else if (settingsVisible) showHome();
         else if (confirming) closeConfirmation();
         else if (homeFromTile) finish();
@@ -181,6 +190,7 @@ public final class HomeActivity extends Activity {
 
     private void showHome() {
         stopRoom();
+        RoomCache.requestUpdate(this);
         room = null;
         fromTile = false;
         renderHome();
@@ -191,34 +201,20 @@ public final class HomeActivity extends Activity {
         page("Дом", true);
         controls.clear();
         addStatus();
-        for (int first = 0; first < Rooms.ALL.size(); first += 2) addRoomRow(first);
-        addButton("Подключение", this::showSettings, R.drawable.ic_connection);
+        filterButton = addButton(onlyLit ? "Все комнаты" : "Где горит", this::toggleRoomFilter, R.drawable.ic_light);
+        filterButton.setSelected(onlyLit);
+        roomGrid = new RoomGrid(this, RoomOverview.favorites(settings), this::showRoom);
+        body.addView(roomGrid);
+        addButton("Настройки", this::showPreferences, R.drawable.ic_connection);
         groupOff = addEdgeAction(this::confirmAllOff);
         updateRoom();
     }
 
-    private void addRoomRow(int first) {
-        LinearLayout row = new LinearLayout(this);
-        for (Rooms.Room item : Rooms.ALL.subList(first, Math.min(first + 2, Rooms.ALL.size()))) {
-            Button card = button(item.label().replace("-", "-\n"), () -> showRoom(item));
-            card.setContentDescription(item.label());
-            card.setTextSize(14);
-            card.setPadding(dp(4), dp(4), dp(4), dp(4));
-            card.setTextColor(PETAL);
-            RoomIcons style = RoomIcons.forRoom(item.id());
-            card.setBackground(buttonBackground(style.surface()));
-            setIcon(card, style.icon(), true);
-            LinearLayout.LayoutParams cardLayout = new LinearLayout.LayoutParams(0, LayoutParams.MATCH_PARENT, 1);
-            if (row.getChildCount() > 0) cardLayout.leftMargin = dp(6);
-            row.addView(card, cardLayout);
-        }
-        LinearLayout.LayoutParams rowLayout = new LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);
-        if (row.getChildCount() == 1) {
-            int pageWidth = dp(getResources().getConfiguration().screenWidthDp);
-            rowLayout.width = (pageWidth - body.getPaddingLeft() - body.getPaddingRight() - dp(6)) / 2;
-        }
-        rowLayout.topMargin = dp(6);
-        body.addView(row, rowLayout);
+    private void toggleRoomFilter() {
+        onlyLit = !onlyLit;
+        filterButton.setText(onlyLit ? "Все комнаты" : "Где горит");
+        filterButton.setSelected(onlyLit);
+        updateRoom();
     }
 
     private void showRoom(Rooms.Room selected) {
@@ -260,6 +256,51 @@ public final class HomeActivity extends Activity {
         home.post(() -> home.scrollTo(0, confirmScroll));
     }
 
+    private void showPreferences() {
+        verifyUntil = 0;
+        main.removeCallbacks(verificationTimeout);
+        installerCheck = false;
+        stopRoom();
+        room = null;
+        page("Настройки");
+        settingsVisible = true;
+        settingsBack = this::showHome;
+        status = null;
+        groupOff = null;
+        addButton("Избранные комнаты", this::showFavorites, R.drawable.ic_room_grid);
+        addButton("Подключение", this::showSettings, R.drawable.ic_connection);
+        addButton("Назад", settingsBack, R.drawable.ic_action_back);
+    }
+
+    private void showFavorites() {
+        page("На плитке");
+        settingsVisible = true;
+        settingsBack = this::showPreferences;
+        List<Rooms.Room> favorites = RoomOverview.favorites(settings);
+        for (int i = 0; i < favorites.size(); i++) {
+            int slot = i;
+            Rooms.Room favorite = favorites.get(i);
+            addButton((i + 1) + ". " + favorite.label(), () -> chooseFavorite(slot), RoomIcons.forRoom(favorite.id()).icon());
+        }
+        addButton("Готово", this::showHome);
+    }
+
+    private void chooseFavorite(int slot) {
+        page("Место " + (slot + 1));
+        settingsVisible = true;
+        settingsBack = this::showFavorites;
+        List<Rooms.Room> favorites = RoomOverview.favorites(settings);
+        for (Rooms.Room choice : Rooms.ALL) {
+            String label = (favorites.get(slot).equals(choice) ? "✓ " : "") + choice.label();
+            addButton(label, () -> {
+                RoomOverview.saveFavorites(settings, RoomOverview.replaceSlot(favorites, slot, choice));
+                RoomCache.requestUpdate(this);
+                showFavorites();
+            }, RoomIcons.forRoom(choice.id()).icon());
+        }
+        addButton("Назад", settingsBack, R.drawable.ic_action_back);
+    }
+
     private void showSettings() {
         verifyUntil = 0;
         main.removeCallbacks(verificationTimeout);
@@ -267,6 +308,7 @@ public final class HomeActivity extends Activity {
         stopRoom();
         room = null;
         page("Подключение");
+        settingsBack = this::showPreferences;
         status = null;
         groupOff = null;
         settingsVisible = true;
@@ -296,7 +338,6 @@ public final class HomeActivity extends Activity {
         if (settings.contains(WbCloud.PREVIOUS_PROFILE)) {
             addButton("Прежний доступ", () -> {
                 WbCloud.restorePrevious(settings);
-                cloud = null;
                 installerCheck = true;
                 demo = false;
                 showHome();
@@ -335,7 +376,7 @@ public final class HomeActivity extends Activity {
                 showHome();
             }, R.drawable.ic_action_demo);
         }
-        addButton("Назад", this::showHome, R.drawable.ic_action_back);
+        addButton("Назад", this::showPreferences, R.drawable.ic_action_back);
     }
 
     private void showRemoteSettings() {
@@ -435,23 +476,11 @@ public final class HomeActivity extends Activity {
         return field;
     }
 
-    private String address() {
-        return settings.getString("address", "");
-    }
+    private String address() { return HomeConnections.address(settings); }
 
-    private boolean automatic() {
-        return settings.getBoolean(RoutePlan.AUTOMATIC, !settings.getBoolean(RemoteSettings.ENABLED, false));
-    }
+    private boolean automatic() { return HomeConnections.automatic(settings); }
 
-    private Route manualRoute() {
-        if (settings.getBoolean(WbCloud.ACTIVE, false)) return Route.CLOUD;
-        return settings.getBoolean(RemoteSettings.ENABLED, false) ? Route.HTTPS : Route.HOME;
-    }
-
-    private WbCloud cloudProfile() throws GeneralSecurityException, IOException, JSONException {
-        if (cloud == null || !cloud.isCurrent(settings)) cloud = new WbCloud(settings);
-        return cloud;
-    }
+    private Route manualRoute() { return HomeConnections.manualRoute(settings); }
 
     private void connectRoom() {
         if (!screenActive || settingsVisible || isFinishing() || connection != null || !attempts.isEmpty()) return;
@@ -463,7 +492,8 @@ public final class HomeActivity extends Activity {
         if (checkingCloud) main.postDelayed(verificationTimeout, verifyUntil - now);
         installerCheck = false;
         if (demo && !checkingCloud) {
-            for (Rooms.Light light : lights()) states.put(light, demoStates.getOrDefault(light, false));
+            Map<Rooms.Light, Boolean> saved = RoomCache.read(this).statesAt(System.currentTimeMillis());
+            for (Rooms.Light light : lights()) states.put(light, saved.getOrDefault(light, false));
             updateRoom();
             return;
         }
@@ -484,6 +514,7 @@ public final class HomeActivity extends Activity {
     // Callbacks from both transports are arbitrated on the main thread. Only the winner can send commands.
     private final class Attempt implements HomeLink.Events, Runnable {
         final Route channel;
+        final String source = RoomCache.scope(HomeActivity.this);
         final Map<String, Boolean> snapshot = new HashMap<>();
         long backoff = FIRST_RETRY_MS;
         HomeLink client;
@@ -497,13 +528,7 @@ public final class HomeActivity extends Activity {
         @Override public void run() {
             if (attempts.get(channel) != this) return;
             try {
-                client = switch (channel) {
-                    case HOME -> automatic()
-                        ? new MqttRoom(address(), lights(), this, settings.contains(WbCloud.PROFILE) ? localSerial() : null)
-                        : new MqttRoom(address(), lights(), this);
-                    case CLOUD -> new RemoteRoom(cloudProfile(), lights(), this);
-                    case HTTPS -> new RemoteRoom(RemoteSettings.load(settings), lights(), this);
-                };
+                client = HomeConnections.open(settings, channel, lights(), this);
                 new Thread(client::connect, "home-connect-" + channel.name()).start();
                 if (!online) connecting = true;
                 updateRoom();
@@ -569,12 +594,17 @@ public final class HomeActivity extends Activity {
                 session++;
                 connection.close();
             }
+            flushReadings();
+            sessionScope = source;
             connection = client;
             route = channel;
             states.clear();
             vacation = snapshot.get(Rooms.VACATION);
-            for (Rooms.Light light : lights()) states.put(light, snapshot.get(light.stateTopic()));
+            for (Rooms.Light light : lights()) {
+                if (snapshot.containsKey(light.stateTopic())) states.put(light, snapshot.get(light.stateTopic()));
+            }
             snapshot.clear();
+            if (!demo) RoomCache.save(HomeActivity.this, sessionScope, states, System.currentTimeMillis());
             connecting = false;
             online = true;
             routes.connected(SystemClock.elapsedRealtime());
@@ -641,9 +671,19 @@ public final class HomeActivity extends Activity {
         }
     }
 
-    private String localSerial() throws IOException, GeneralSecurityException, JSONException {
-        String saved = settings.getString(WbCloud.SERIAL, "");
-        return saved.isEmpty() ? cloudProfile().controllerSerial : saved;
+    private void flushReadings() {
+        main.removeCallbacks(saveReadings);
+        if (!readingsToSave.isEmpty() && sessionScope != null) {
+            RoomCache.save(this, sessionScope, readingsToSave, System.currentTimeMillis());
+        }
+        readingsToSave.clear();
+    }
+
+    private void cacheReading(Rooms.Light light, Boolean value) {
+        if (sessionScope == null || demo) return;
+        boolean first = readingsToSave.isEmpty();
+        readingsToSave.put(light, value);
+        if (first) main.post(saveReadings);
     }
 
     private boolean resumeManualAfterCheck() {
@@ -672,6 +712,8 @@ public final class HomeActivity extends Activity {
     }
 
     private void resetConnection() {
+        flushReadings();
+        sessionScope = null;
         session++;
         main.removeCallbacks(reconnect);
         main.removeCallbacks(checkHome);
@@ -685,6 +727,7 @@ public final class HomeActivity extends Activity {
         online = false;
         vacation = null;
         refreshNeeded = false;
+        if (!pending.isEmpty()) TileRead.commandsPending(false);
         pending.clear();
         groupCommand = null;
         states.clear();
@@ -740,10 +783,12 @@ public final class HomeActivity extends Activity {
                 Command command = pending.get(light);
                 if (!retained && value != null && command != null && value == command.target()) {
                     pending.remove(light);
+                    if (pending.isEmpty()) TileRead.commandsPending(false);
                     if (command != groupCommand) {
                         command.feedback().performHapticFeedback(HapticFeedbackConstants.CONFIRM);
                     }
                 }
+                if (!pending.containsKey(light)) cacheReading(light, value);
                 break;
             }
         }
@@ -781,7 +826,7 @@ public final class HomeActivity extends Activity {
         if (!canChangeLight(light)) return;
         boolean next = !state;
         if (demo) {
-            demoStates.put(light, next);
+            RoomCache.saveDemo(this, java.util.Collections.singletonMap(light, next));
             receive(light.stateTopic(), next, false);
             controls.get(light).performHapticFeedback(HapticFeedbackConstants.CONFIRM);
             return;
@@ -789,7 +834,9 @@ public final class HomeActivity extends Activity {
 
         notice = null;
         Command command = new Command(next, controls.get(light));
+        TileRead.commandsPending(true);
         pending.put(light, command);
+        cacheReading(light, null);
         try {
             connection.send(light, next);
             awaitConfirmation(command);
@@ -805,17 +852,21 @@ public final class HomeActivity extends Activity {
         notice = null;
         if (demo) {
             for (Rooms.Light light : lights()) {
-                demoStates.put(light, false);
                 states.put(light, false);
             }
+            RoomCache.saveDemo(this, states);
             groupOff.performHapticFeedback(HapticFeedbackConstants.CONFIRM);
             updateRoom();
             return;
         }
 
+        TileRead.commandsPending(true);
         groupCommand = new Command(false, groupOff);
         for (Rooms.Light light : lights()) {
-            if (!Boolean.FALSE.equals(states.get(light))) pending.put(light, groupCommand);
+            if (!Boolean.FALSE.equals(states.get(light))) {
+                pending.put(light, groupCommand);
+                cacheReading(light, null);
+            }
         }
         try {
             if (room == null) connection.sendAllOff();
@@ -836,8 +887,10 @@ public final class HomeActivity extends Activity {
             boolean timedOut = pending.entrySet().removeIf(item -> {
                 if (item.getValue() != command) return false;
                 states.remove(item.getKey());
+                cacheReading(item.getKey(), null);
                 return true;
             });
+            if (pending.isEmpty()) TileRead.commandsPending(false);
             if (command == groupCommand) groupCommand = null;
             else if (!timedOut) return;
             notice = "Нет подтверждения";
@@ -892,7 +945,15 @@ public final class HomeActivity extends Activity {
             setLightIcon(button, icon, lit);
             button.setStateDescription(description);
         }
-        String offLabel = "Погасить всё";
+        if (roomGrid != null) {
+            Map<Rooms.Light, Boolean> confirmed = states;
+            if (!pending.isEmpty()) {
+                confirmed = new HashMap<>(states);
+                for (Rooms.Light light : pending.keySet()) confirmed.remove(light);
+            }
+            roomGrid.display(confirmed, onlyLit);
+        }
+        String offLabel = room == null ? "Погасить весь дом" : "Погасить здесь";
         boolean off = allOff();
         if (confirming) offLabel = "Выключить";
         else if (groupCommand != null) offLabel = room == null ? "Выключаю свет…" : "Выключаю…";
@@ -917,6 +978,9 @@ public final class HomeActivity extends Activity {
     }
 
     private TextView page(String title, boolean floral) {
+        roomGrid = null;
+        filterButton = null;
+        settingsBack = null;
         settingsVisible = false;
         remoteSettingsVisible = false;
         pairing = false;
@@ -970,7 +1034,7 @@ public final class HomeActivity extends Activity {
 
     private Button addEdgeAction(Runnable action) {
         body.addView(new View(this), new LinearLayout.LayoutParams(1, 0, 1));
-        Button button = addButton("Погасить всё", action);
+        Button button = addButton(room == null ? "Погасить весь дом" : "Погасить здесь", action);
         button.setTextSize(14);
         button.setPadding(dp(15), dp(2), dp(15), dp(12));
         return button;

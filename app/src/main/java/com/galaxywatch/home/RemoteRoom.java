@@ -62,6 +62,14 @@ final class RemoteRoom implements HomeLink {
         }
     }
 
+    void readOnce() {
+        try {
+            requests.execute(this::poll);
+        } catch (RejectedExecutionException ignored) {
+            // The reader was closed before its request started.
+        }
+    }
+
     private void poll() {
         if (closed) return;
         try {

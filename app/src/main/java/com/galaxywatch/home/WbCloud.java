@@ -18,6 +18,7 @@ import java.security.GeneralSecurityException;
 import java.util.Locale;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.function.BooleanSupplier;
 
 import javax.net.ssl.HttpsURLConnection;
@@ -28,8 +29,9 @@ final class WbCloud {
     static final String SERIAL = "wb_cloud_controller_serial";
     static final String PROFILE = "wb_cloud_profile";
     static final String PREVIOUS_PROFILE = "wb_cloud_previous_profile";
-    private static final String IMPORT_ID = "wb_cloud_import_id";
-    private static final String PREVIOUS_IMPORT_ID = "wb_cloud_previous_import_id";
+    static final String IMPORT_ID = "wb_cloud_import_id";
+    static final String PREVIOUS_IMPORT_ID = "wb_cloud_previous_import_id";
+    static final String CONFIG_REVISION = "wb_cloud_config_revision";
     static final String STORAGE_NOTICE = "Часы не сохранили доступ. Повторяем";
     private static final String CLOUD_API = "https://wirenboard.cloud/api/v1/";
     private static final String PENDING_PROFILE = "wb-cloud.json";
@@ -93,7 +95,7 @@ final class WbCloud {
     }
 
     boolean isCurrent(SharedPreferences preferences) {
-        return importId.equals(preferences.getString(IMPORT_ID, ""));
+        return preferences.contains(PROFILE) && importId.equals(preferences.getString(IMPORT_ID, ""));
     }
 
     static String importProfile(Context context, SharedPreferences settings) {
@@ -119,37 +121,45 @@ final class WbCloud {
 
     private static void saveImportedProfile(SharedPreferences settings, Profile profile, String id)
         throws GeneralSecurityException, IOException {
-        SharedPreferences.Editor editor = settings.edit();
-        if (settings.contains(PROFILE) && !settings.contains(PREVIOUS_PROFILE)) {
-            editor.putString(PREVIOUS_PROFILE, settings.getString(PROFILE, ""));
-            editor.putString(PREVIOUS_IMPORT_ID, settings.getString(IMPORT_ID, ""));
+        String sealed = seal(profile);
+        synchronized (settings) {
+            if (id.equals(settings.getString(IMPORT_ID, ""))) return;
+            SharedPreferences.Editor editor = settings.edit();
+            if (settings.contains(PROFILE) && !settings.contains(PREVIOUS_PROFILE)) {
+                editor.putString(PREVIOUS_PROFILE, settings.getString(PROFILE, ""));
+                editor.putString(PREVIOUS_IMPORT_ID, settings.getString(IMPORT_ID, ""));
+            }
+            if (!settings.contains(RoutePlan.AUTOMATIC) && !settings.getBoolean(RemoteSettings.ENABLED, false)) {
+                editor.putBoolean(ACTIVE, true);
+            }
+            if (!editor.putString(PROFILE, sealed).putString(IMPORT_ID, id).putString(SERIAL, profile.serial())
+                .putString(CONFIG_REVISION, UUID.randomUUID().toString())
+                .putBoolean(VERIFY, true).putBoolean("demo", false).commit()) throw new IOException();
         }
-        if (!settings.contains(RoutePlan.AUTOMATIC) && !settings.getBoolean(RemoteSettings.ENABLED, false)) {
-            editor.putBoolean(ACTIVE, true);
-        }
-        if (!editor.putString(PROFILE, seal(profile)).putString(IMPORT_ID, id).putString(SERIAL, profile.serial())
-            .putBoolean(VERIFY, true).putBoolean("demo", false).commit()) throw new IOException();
     }
 
     static void restorePrevious(SharedPreferences settings) {
         synchronized (settings) {
             settings.edit().putString(PROFILE, settings.getString(PREVIOUS_PROFILE, ""))
                 .putString(IMPORT_ID, settings.getString(PREVIOUS_IMPORT_ID, "")).remove(SERIAL)
+                .putString(CONFIG_REVISION, UUID.randomUUID().toString())
                 .putBoolean(VERIFY, true).putBoolean("demo", false)
                 .remove(PREVIOUS_PROFILE).remove(PREVIOUS_IMPORT_ID).apply();
         }
     }
 
     static void confirmRead(Context context, SharedPreferences settings) {
-        String id = settings.getString(IMPORT_ID, "");
-        if (!validImportId(id)) return;
-        try {
-            new File(context.getNoBackupFilesDir(), ONLINE_PREFIX + id).createNewFile();
-            if (settings.contains(VERIFY) || settings.contains(PREVIOUS_PROFILE)) {
-                settings.edit().remove(VERIFY).remove(PREVIOUS_PROFILE).remove(PREVIOUS_IMPORT_ID).apply();
+        synchronized (settings) {
+            String id = settings.getString(IMPORT_ID, "");
+            if (!validImportId(id)) return;
+            try {
+                new File(context.getNoBackupFilesDir(), ONLINE_PREFIX + id).createNewFile();
+                if (settings.contains(VERIFY) || settings.contains(PREVIOUS_PROFILE)) {
+                    settings.edit().remove(VERIFY).remove(PREVIOUS_PROFILE).remove(PREVIOUS_IMPORT_ID).apply();
+                }
+            } catch (IOException failure) {
+                // Without a receipt the PC must keep the prepared profile for a retry.
             }
-        } catch (IOException failure) {
-            // Without a receipt the PC must keep the prepared profile for a retry.
         }
     }
 
@@ -157,6 +167,7 @@ final class WbCloud {
 
     synchronized HttpsURLConnection open(String path, boolean reading, BooleanSupplier cancelled) throws IOException, JSONException {
         checkCancelled(cancelled);
+        if (!isCurrent(settings)) throw new IOException("WB Cloud profile changed");
         session.persist(this::storeProfile);
         URI uri = URI.create(session.profile.origin() + path);
         if (serviceCookies == null || cookieValues(serviceCookies, uri).isEmpty()) {
@@ -281,9 +292,12 @@ final class WbCloud {
 
     private void storeProfile(Profile profile) throws StorageUnavailable {
         try {
+            String sealed = seal(profile);
             synchronized (settings) {
-                if (importId.equals(settings.getString(IMPORT_ID, ""))
-                    && settings.edit().putString(PROFILE, seal(profile)).commit()) return;
+                String key = null;
+                if (isCurrent(settings)) key = PROFILE;
+                else if (importId.equals(settings.getString(PREVIOUS_IMPORT_ID, null))) key = PREVIOUS_PROFILE;
+                if (key != null && settings.edit().putString(key, sealed).commit()) return;
             }
         } catch (GeneralSecurityException | IOException | IllegalArgumentException failure) {
             throw new StorageUnavailable();

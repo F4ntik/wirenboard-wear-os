@@ -19,6 +19,7 @@ import javax.crypto.spec.GCMParameterSpec;
 
 final class RemoteSettings {
     static final String ENABLED = "remote_enabled";
+    static final String REVISION = "remote_pairing_revision";
     static final String ORIGIN = "remote_origin";
     private static final String TOKEN = "remote_token";
     private static final String KEYSTORE = "AndroidKeyStore";
@@ -57,7 +58,8 @@ final class RemoteSettings {
     static void save(SharedPreferences settings, String server, String token)
         throws GeneralSecurityException, IOException {
         if (!validToken(token)) throw new IllegalArgumentException();
-        settings.edit().putString(ORIGIN, server).putString(TOKEN, seal(server, token)).apply();
+        settings.edit().putString(ORIGIN, server).putString(TOKEN, seal(server, token))
+            .putString(REVISION, java.util.UUID.randomUUID().toString()).apply();
     }
 
     static String unseal(String purpose, String value) throws GeneralSecurityException, IOException {
