@@ -472,12 +472,10 @@ public final class CatalogActivity extends Activity {
         } else if (home.rooms.isEmpty() || home.lights.isEmpty()) {
             note(SETUP_HINT);
         } else {
-            Button filter = button(onlyLit ? "Все комнаты" : "Где горит", () -> {
-                onlyLit = !onlyLit;
-                homeScroll = 0;
-                render(Page.HOME);
-            }, R.drawable.ic_light);
-            filter.setSelected(onlyLit);
+            add(new RoomFilter(this, onlyLit, selected -> {
+                onlyLit = selected;
+                updateRooms();
+            }), 5);
             roomRows = new LinearLayout(this);
             roomRows.setOrientation(LinearLayout.VERTICAL);
             add(roomRows, 3);

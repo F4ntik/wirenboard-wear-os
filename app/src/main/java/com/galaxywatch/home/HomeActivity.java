@@ -84,7 +84,6 @@ public final class HomeActivity extends Activity {
     private final Runnable saveReadings = this::flushReadings;
     private boolean onlyLit;
     private RoomGrid roomGrid;
-    private Button filterButton;
     private Runnable settingsBack;
     private Boolean vacation;
     private boolean online;
@@ -232,19 +231,17 @@ public final class HomeActivity extends Activity {
         page("Дом", true);
         controls.clear();
         addStatus();
-        filterButton = addButton(onlyLit ? "Все комнаты" : "Где горит", this::toggleRoomFilter, R.drawable.ic_light);
-        filterButton.setSelected(onlyLit);
+        RoomFilter filter = new RoomFilter(this, onlyLit, selected -> {
+            onlyLit = selected;
+            updateRoom();
+        });
+        LinearLayout.LayoutParams filterLayout = new LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);
+        filterLayout.topMargin = dp(5);
+        body.addView(filter, filterLayout);
         roomGrid = new RoomGrid(this, RoomOverview.favorites(settings), this::showRoom);
         body.addView(roomGrid);
         addButton("Настройки", this::showPreferences, R.drawable.ic_connection);
         groupOff = addEdgeAction(this::confirmAllOff);
-        updateRoom();
-    }
-
-    private void toggleRoomFilter() {
-        onlyLit = !onlyLit;
-        filterButton.setText(onlyLit ? "Все комнаты" : "Где горит");
-        filterButton.setSelected(onlyLit);
         updateRoom();
     }
 
@@ -1013,7 +1010,6 @@ public final class HomeActivity extends Activity {
 
     private TextView page(String title, boolean floral) {
         roomGrid = null;
-        filterButton = null;
         settingsBack = null;
         settingsVisible = false;
         remoteSettingsVisible = false;
