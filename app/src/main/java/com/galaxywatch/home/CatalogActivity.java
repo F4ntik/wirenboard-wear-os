@@ -3,6 +3,7 @@ package com.galaxywatch.home;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Bundle;
@@ -11,7 +12,10 @@ import android.os.Looper;
 import android.os.SystemClock;
 import android.text.InputType;
 import android.view.Gravity;
+import android.view.InputDevice;
+import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
@@ -48,6 +52,7 @@ public final class CatalogActivity extends Activity {
     private static final long RETRY_MS = 9_000;
     private static final long FRESH_MS = 22_000;
     private static final long NOTICE_MS = 15_000;
+    private static final int BRIGHTNESS_PER_ROTARY_TICK = 5;
     private static final String SETUP_HINT = "На Wiren Board откройте «Интеграции → Пульт света Wear OS» и добавьте комнаты и лампы.";
     private static final ExecutorService NETWORK = Executors.newSingleThreadExecutor(r -> new Thread(r, "wear-catalog-app"));
     // Accessed on the main thread. A command still occupies its slot if the screen is dismissed.
@@ -77,6 +82,7 @@ public final class CatalogActivity extends Activity {
     private boolean foreground, onlyLit, direct, verify, setupBusy, customColor;
     private String roomId, lightId, commandNotice, setupNotice, address, confirmRevision;
     private int favoriteSlot, editorValue, homeScroll, roomScroll;
+    private Bitmap homePreview;
     private Page screen;
     private ScrollView scroll;
     private LinearLayout body, roomRows;
@@ -84,7 +90,10 @@ public final class CatalogActivity extends Activity {
     private Button off, apply, connection, forget, customColorButton;
     private Boolean edgeAllOff;
     private EditText addressField;
+    private SeekBar brightnessSlider;
     private SeekBar[] colorSliders;
+    private double rotaryBrightness;
+    private boolean brightnessTouchTracking;
 
     @Override protected void onCreate(Bundle saved) {
         super.onCreate(saved);
@@ -123,6 +132,7 @@ public final class CatalogActivity extends Activity {
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        homePreview = null;
         verify |= intent.getBooleanExtra("verify_cloud", false);
         if (CatalogLink.paired(this)) {
             cancelRead();
@@ -166,7 +176,31 @@ public final class CatalogActivity extends Activity {
 
     @Override public void onWindowFocusChanged(boolean focused) {
         super.onWindowFocusChanged(focused);
+        if (!focused && brightnessSlider != null) {
+            brightnessTouchTracking = false;
+            rotaryBrightness = editorValue;
+        }
         for (LightControls controls : lights.values()) controls.power.animation(foreground && focused);
+    }
+
+    @Override public boolean dispatchGenericMotionEvent(MotionEvent event) {
+        if (screen != Page.BRIGHTNESS || brightnessSlider == null
+            || event.getActionMasked() != MotionEvent.ACTION_SCROLL
+            || !event.isFromSource(InputDevice.SOURCE_ROTARY_ENCODER)) {
+            return super.dispatchGenericMotionEvent(event);
+        }
+        // Handle rotary input before the ScrollView can scroll the brightness editor.
+        float delta = event.getAxisValue(MotionEvent.AXIS_SCROLL);
+        if (!brightnessTouchTracking && Float.isFinite(delta) && delta != 0) {
+            rotaryBrightness = Math.max(0, Math.min(brightnessSlider.getMax(),
+                rotaryBrightness - (double) delta * BRIGHTNESS_PER_ROTARY_TICK));
+            int value = (int) Math.round(rotaryBrightness);
+            if (editorValue != value) {
+                editorValue = value;
+                updateEditor();
+            }
+        }
+        return true;
     }
 
     @Override protected void onSaveInstanceState(Bundle out) {
@@ -212,6 +246,11 @@ public final class CatalogActivity extends Activity {
     }
 
     private void render(Page next) {
+        if (next == Page.ROOM && screen == Page.HOME && !direct) {
+            homePreview = SwipePage.capture(scroll);
+        } else if (next == Page.HOME || next == Page.SETUP || direct) {
+            homePreview = null;
+        }
         for (LightControls controls : lights.values()) controls.power.animation(false);
         screen = next;
         cards.clear();
@@ -222,13 +261,20 @@ public final class CatalogActivity extends Activity {
         off = apply = connection = forget = customColorButton = null;
         edgeAllOff = null;
         addressField = null;
+        brightnessSlider = null;
+        brightnessTouchTracking = false;
         colorSliders = null;
         scroll = new ScrollView(this);
         scroll.setBackgroundColor(BG);
-        scroll.setVerticalScrollBarEnabled(false);
         scroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
         boolean floral = next == Page.HOME || next == Page.ROOM;
         scroll.setFillViewport(floral);
+        boolean rotaryList = floral || next == Page.SETTINGS || next == Page.FAVORITES || next == Page.PICK_FAVORITE;
+        scroll.setVerticalScrollBarEnabled(rotaryList);
+        if (rotaryList) {
+            scroll.setFocusableInTouchMode(true);
+            scroll.setDescendantFocusability(ViewGroup.FOCUS_BEFORE_DESCENDANTS);
+        }
         body = new LinearLayout(this);
         body.setOrientation(LinearLayout.VERTICAL);
         body.setGravity(Gravity.CENTER_HORIZONTAL);
@@ -243,13 +289,15 @@ public final class CatalogActivity extends Activity {
         swipe.addView(scroll, MATCH_PARENT, MATCH_PARENT);
         swipe.addCallback(new SwipeDismissFrameLayout.Callback() {
             @Override public void onDismissed(SwipeDismissFrameLayout frame) {
-                if (scroll.getParent() == frame) {
+                if (!isFinishing() && scroll.getParent() == frame) {
                     if (screen == Page.APPROVE && setupBusy) render(Page.APPROVE);
+                    else if (screen == Page.ROOM && direct) SwipePage.finish(CatalogActivity.this, frame);
                     else onBackPressed();
                 }
             }
         });
-        setContentView(swipe);
+        setContentView(SwipePage.withPreview(swipe, next == Page.ROOM ? homePreview : null));
+        if (rotaryList) scroll.requestFocus();
         switch (next) {
             case SETUP -> showSetup();
             case APPROVE -> showApproval();
@@ -266,7 +314,8 @@ public final class CatalogActivity extends Activity {
         update();
         int restore = next == Page.HOME ? homeScroll : next == Page.ROOM ? roomScroll : 0;
         ScrollView current = scroll;
-        if (restore > 0) current.post(() -> current.scrollTo(0, restore));
+        if (next == Page.HOME && roomRows != null) BezelHelp.showOnce(current);
+        SwipePage.restoreScroll(current, restore);
     }
 
     private TextView title(String label, int artwork) {
@@ -475,10 +524,10 @@ public final class CatalogActivity extends Activity {
             add(new RoomFilter(this, onlyLit, selected -> {
                 onlyLit = selected;
                 updateRooms();
-            }), 5);
+            }), 0);
             roomRows = new LinearLayout(this);
             roomRows.setOrientation(LinearLayout.VERTICAL);
-            add(roomRows, 3);
+            add(roomRows, 0);
         }
         button("Настройки", () -> go(Page.SETTINGS), R.drawable.ic_connection);
         if (home != null && !home.lights.isEmpty()) {
@@ -550,6 +599,7 @@ public final class CatalogActivity extends Activity {
         if (home != null && !home.rooms.isEmpty()) button("Избранные комнаты", () -> go(Page.FAVORITES), R.drawable.ic_room_grid);
         connection = button("Подключение", () -> startActivity(new Intent(this, HomeActivity.class)
             .putExtra(HomeActivity.LEGACY_SETTINGS, true)), R.drawable.ic_connection);
+        note(BezelHelp.GUIDE);
         forget = button("Отключить дом", () -> go(Page.FORGET), R.drawable.ic_action_close);
         button("Назад", this::onBackPressed, R.drawable.ic_action_back);
     }
@@ -632,11 +682,14 @@ public final class CatalogActivity extends Activity {
         editorLight = note(findLight().label);
         addStatus();
         editorPreview = note("");
-        SeekBar brightness = slider("Яркость", 100, editorValue, value -> {
+        rotaryBrightness = editorValue;
+        brightnessSlider = slider("Яркость", 100, editorValue, value -> {
             editorValue = value;
+            rotaryBrightness = value;
             updateEditor();
         });
-        add(brightness, 3);
+        add(brightnessSlider, 3);
+        note("Поверните безель");
         apply = button("Применить", () -> apply(CatalogLink.Change.brightness(editorValue)), 0);
         button("Назад", this::onBackPressed, R.drawable.ic_action_back);
     }
@@ -697,8 +750,15 @@ public final class CatalogActivity extends Activity {
             @Override public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
                 if (fromUser) change.changed(progress);
             }
-            @Override public void onStartTrackingTouch(SeekBar bar) {}
-            @Override public void onStopTrackingTouch(SeekBar bar) {}
+            @Override public void onStartTrackingTouch(SeekBar bar) {
+                if (bar == brightnessSlider) {
+                    brightnessTouchTracking = true;
+                    rotaryBrightness = editorValue;
+                }
+            }
+            @Override public void onStopTrackingTouch(SeekBar bar) {
+                if (bar == brightnessSlider) brightnessTouchTracking = false;
+            }
         });
         return slider;
     }
@@ -718,6 +778,7 @@ public final class CatalogActivity extends Activity {
         message(editorLight, findLight().label);
         CatalogLink.LightState confirmed = lightState(lightId);
         if (screen == Page.BRIGHTNESS) {
+            brightnessSlider.setProgress(editorValue);
             message(editorPreview, editorValue + "%");
             views.enabled(apply, canCommand() && confirmed != null && confirmed.brightness != null
                 && editorValue != confirmed.brightness);

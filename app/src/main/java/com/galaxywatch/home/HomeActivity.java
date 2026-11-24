@@ -5,6 +5,7 @@ import android.app.Activity;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
+import android.graphics.Bitmap;
 import android.graphics.Typeface;
 import android.graphics.drawable.Animatable;
 import android.graphics.drawable.Drawable;
@@ -84,6 +85,8 @@ public final class HomeActivity extends Activity {
     private final Runnable saveReadings = this::flushReadings;
     private boolean onlyLit;
     private RoomGrid roomGrid;
+    private Bitmap homePreview;
+    private int homeScroll;
     private Runnable settingsBack;
     private Boolean vacation;
     private boolean online;
@@ -139,6 +142,8 @@ public final class HomeActivity extends Activity {
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        homePreview = null;
+        homeScroll = 0;
         onlyLit = false;
         installerCheck = intent.getBooleanExtra(CHECK_CLOUD, false);
         if (routeToCatalog(intent)) return;
@@ -228,24 +233,30 @@ public final class HomeActivity extends Activity {
     }
 
     private void renderHome() {
+        homePreview = null;
         page("Дом", true);
+        SwipePage.restoreScroll(scroll, homeScroll);
+        homeScroll = 0;
         controls.clear();
         addStatus();
         RoomFilter filter = new RoomFilter(this, onlyLit, selected -> {
             onlyLit = selected;
             updateRoom();
         });
-        LinearLayout.LayoutParams filterLayout = new LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);
-        filterLayout.topMargin = dp(5);
-        body.addView(filter, filterLayout);
+        body.addView(filter, new LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
         roomGrid = new RoomGrid(this, RoomOverview.favorites(settings), this::showRoom);
         body.addView(roomGrid);
+        BezelHelp.showOnce(scroll);
         addButton("Настройки", this::showPreferences, R.drawable.ic_connection);
         groupOff = addEdgeAction(this::confirmAllOff);
         updateRoom();
     }
 
     private void showRoom(Rooms.Room selected) {
+        if (!fromTile && roomGrid != null) {
+            homePreview = SwipePage.capture(scroll);
+            homeScroll = scroll.getScrollY();
+        }
         stopRoom();
         room = selected;
         page(selected.label(), true);
@@ -300,6 +311,7 @@ public final class HomeActivity extends Activity {
         if (!HomeConnections.DEFAULT_DEMO || !demo || !address().isEmpty() || settings.contains(WbCloud.PROFILE)) {
             addButton("Подключение", this::showSettings, R.drawable.ic_connection);
         }
+        body.addView(description(BezelHelp.GUIDE, Gravity.CENTER));
         addButton("Назад", settingsBack, R.drawable.ic_action_back);
     }
 
@@ -1017,7 +1029,7 @@ public final class HomeActivity extends Activity {
         confirming = false;
         scroll = new ScrollView(this);
         scroll.setBackgroundColor(BG);
-        scroll.setVerticalScrollBarEnabled(false);
+        scroll.setVerticalScrollBarEnabled(floral);
         scroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
         scroll.setFillViewport(floral);
         body = new LinearLayout(this);
@@ -1029,15 +1041,19 @@ public final class HomeActivity extends Activity {
         body.setPadding(dp(side), dp(floral ? width * 3 / 100 : vertical), dp(side), dp(floral ? 3 : vertical));
         scroll.addView(body);
         scroll.setFocusable(true);
+        if (floral) scroll.setFocusableInTouchMode(true);
         SwipeDismissFrameLayout frame = new SwipeDismissFrameLayout(this);
         frame.setSwipeable(true);
         frame.addView(scroll);
         frame.addCallback(new SwipeDismissFrameLayout.Callback() {
             @Override public void onDismissed(SwipeDismissFrameLayout layout) {
-                if (layout == scroll.getParent()) onBackPressed();
+                if (!isFinishing() && layout == scroll.getParent()) {
+                    if (room != null && fromTile) SwipePage.finish(HomeActivity.this, layout);
+                    else onBackPressed();
+                }
             }
         });
-        setContentView(frame);
+        setContentView(SwipePage.withPreview(frame, room != null ? homePreview : null));
         scroll.requestFocus();
         TextView header = description(title, Gravity.CENTER);
         header.setTextColor(TEXT);
