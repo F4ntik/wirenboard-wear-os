@@ -4,7 +4,7 @@
         <item name="android:fontFamily">sans</item>
         <item name="android:windowBackground">#171118</item>
         <item name="android:colorAccent">#F2B9CF</item>
-        <!-- The page handles the gesture because the room and home share one activity. -->
-        <item name="android:windowSwipeToDismiss">false</item>
+        <!-- Wear dismisses the window at the root; nested pages handle their own gesture. -->
+        <item name="android:windowSwipeToDismiss">true</item>
     </style>
 </resources>

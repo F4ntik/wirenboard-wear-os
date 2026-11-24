@@ -33,7 +33,6 @@ import android.widget.ScrollView;
 import android.widget.Switch;
 import android.widget.TextView;
 import com.galaxywatch.home.RoutePlan.Route;
-import androidx.wear.widget.SwipeDismissFrameLayout;
 
 import java.io.IOException;
 import java.security.GeneralSecurityException;
@@ -312,7 +311,6 @@ public final class HomeActivity extends Activity {
         if (!HomeConnections.DEFAULT_DEMO || !demo || !address().isEmpty() || settings.contains(WbCloud.PROFILE)) {
             addButton("Подключение", this::showSettings, R.drawable.ic_connection);
         }
-        body.addView(description(BezelHelp.GUIDE, Gravity.CENTER));
         addButton("Назад", settingsBack, R.drawable.ic_action_back);
     }
 
@@ -1037,18 +1035,14 @@ public final class HomeActivity extends Activity {
         scroll.addView(body);
         scroll.setFocusable(true);
         if (floral) scroll.setFocusableInTouchMode(true);
-        SwipeDismissFrameLayout frame = new SwipeDismissFrameLayout(this);
-        frame.setSwipeable(true);
-        frame.addView(scroll);
-        frame.addCallback(new SwipeDismissFrameLayout.Callback() {
-            @Override public void onDismissed(SwipeDismissFrameLayout layout) {
-                if (!isFinishing() && layout == scroll.getParent()) {
-                    if (room != null && fromTile) SwipePage.finish(HomeActivity.this, layout);
-                    else onBackPressed();
-                }
-            }
-        });
-        setContentView(SwipePage.withPreview(frame, room != null ? homePreview : null));
+        if (floral && (room == null || fromTile)) {
+            setContentView(scroll);
+        } else {
+            ScrollView page = scroll;
+            setContentView(SwipePage.nested(page, room == null ? null : homePreview, () -> {
+                if (!isFinishing() && scroll == page) onBackPressed();
+            }));
+        }
         scroll.requestFocus();
         TextView header = description(title, Gravity.CENTER);
         header.setTextColor(TEXT);

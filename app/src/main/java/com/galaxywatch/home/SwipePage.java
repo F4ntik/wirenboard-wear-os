@@ -1,13 +1,14 @@
 package com.galaxywatch.home;
 
-import android.app.Activity;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.drawable.BitmapDrawable;
-import android.os.Build;
+import android.view.MotionEvent;
 import android.view.View;
 import android.widget.FrameLayout;
 import android.widget.ScrollView;
+
+import androidx.wear.widget.SwipeDismissFrameLayout;
 
 import static android.view.ViewGroup.LayoutParams.MATCH_PARENT;
 
@@ -25,7 +26,20 @@ final class SwipePage {
         return preview;
     }
 
-    static View withPreview(View page, Bitmap preview) {
+    static View nested(View content, Bitmap preview, Runnable back) {
+        SwipeDismissFrameLayout page = new SwipeDismissFrameLayout(content.getContext()) {
+            @Override public boolean dispatchTouchEvent(MotionEvent event) {
+                if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                    // This gesture navigates within the window, including swipes from the left edge.
+                    getParent().requestDisallowInterceptTouchEvent(true);
+                }
+                return super.dispatchTouchEvent(event);
+            }
+        };
+        page.addView(content, MATCH_PARENT, MATCH_PARENT);
+        page.addCallback(new SwipeDismissFrameLayout.Callback() {
+            @Override public void onDismissed(SwipeDismissFrameLayout frame) { back.run(); }
+        });
         if (preview == null) return page;
         FrameLayout viewport = new FrameLayout(page.getContext());
         // Wear translates the child and draws its scrim over the parent's background.
@@ -45,14 +59,4 @@ final class SwipePage {
         });
     }
 
-    @SuppressWarnings("deprecation")
-    static void finish(Activity activity, View page) {
-        // AndroidX resets the translation before the dismissal callback.
-        page.setVisibility(View.INVISIBLE);
-        if (Build.VERSION.SDK_INT >= 34) {
-            activity.overrideActivityTransition(Activity.OVERRIDE_TRANSITION_CLOSE, 0, 0);
-        }
-        activity.finish();
-        if (Build.VERSION.SDK_INT < 34) activity.overridePendingTransition(0, 0);
-    }
 }

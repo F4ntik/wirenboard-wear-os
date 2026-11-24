@@ -6,7 +6,6 @@ import android.widget.ScrollView;
 import android.widget.Toast;
 
 final class BezelHelp {
-    static final String GUIDE = "Ведите пальцем по краю экрана или вращайте кольцо, чтобы листать список.";
     private static final String SEEN = "bezel_scroll_hint_seen";
 
     static void showOnce(ScrollView list) {

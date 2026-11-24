@@ -26,7 +26,6 @@ import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
 
-import androidx.wear.widget.SwipeDismissFrameLayout;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -285,19 +284,17 @@ public final class CatalogActivity extends Activity {
         body.setPadding(views.dp(side), views.dp(floral ? width * 3 / 100 : Math.max(12, width / 12)),
             views.dp(side), views.dp(floral ? 3 : 24));
         scroll.addView(body, new ScrollView.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
-        SwipeDismissFrameLayout swipe = new SwipeDismissFrameLayout(this);
-        swipe.setSwipeable(true);
-        swipe.addView(scroll, MATCH_PARENT, MATCH_PARENT);
-        swipe.addCallback(new SwipeDismissFrameLayout.Callback() {
-            @Override public void onDismissed(SwipeDismissFrameLayout frame) {
-                if (!isFinishing() && scroll.getParent() == frame) {
-                    if (screen == Page.APPROVE && setupBusy) render(Page.APPROVE);
-                    else if (screen == Page.ROOM && direct) SwipePage.finish(CatalogActivity.this, frame);
-                    else onBackPressed();
-                }
-            }
-        });
-        setContentView(SwipePage.withPreview(swipe, next == Page.ROOM ? homePreview : null));
+        boolean exitsWindow = next == Page.HOME || next == Page.SETUP || (next == Page.ROOM && direct);
+        if (exitsWindow) {
+            setContentView(scroll);
+        } else {
+            ScrollView page = scroll;
+            setContentView(SwipePage.nested(page, next == Page.ROOM ? homePreview : null, () -> {
+                if (isFinishing() || scroll != page) return;
+                if (screen == Page.APPROVE && setupBusy) render(Page.APPROVE);
+                else onBackPressed();
+            }));
+        }
         if (rotaryList) scroll.requestFocus();
         switch (next) {
             case SETUP -> showSetup();
@@ -600,7 +597,6 @@ public final class CatalogActivity extends Activity {
         if (home != null && !home.rooms.isEmpty()) button("Избранные комнаты", () -> go(Page.FAVORITES), R.drawable.ic_room_grid);
         connection = button("Подключение", () -> startActivity(new Intent(this, HomeActivity.class)
             .putExtra(HomeActivity.LEGACY_SETTINGS, true)), R.drawable.ic_connection);
-        note(BezelHelp.GUIDE);
         forget = button("Отключить дом", () -> go(Page.FORGET), R.drawable.ic_action_close);
         button("Назад", this::onBackPressed, R.drawable.ic_action_back);
     }
