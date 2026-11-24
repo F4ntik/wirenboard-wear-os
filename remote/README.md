@@ -4,7 +4,7 @@
 
 ## Пакет для контроллера Wiren Board
 
-Скачайте [пакет для Wiren Board (.deb)](https://github.com/F4ntik/wirenboard-wear-os/releases/download/v0.8.2/wb-wear-light-gateway_0.2.0_all.deb) и скопируйте файл на контроллер, например через файловый менеджер WB Cloud. В терминале **контроллера** перейдите в папку с файлом и выполните команду от имени администратора. Если вы вошли как `root`, можно опустить `sudo`.
+Скачайте [пакет для Wiren Board (.deb)](https://github.com/F4ntik/wirenboard-wear-os/releases/download/v0.8.3/wb-wear-light-gateway_0.2.0_all.deb) и скопируйте файл на контроллер, например через файловый менеджер WB Cloud. В терминале **контроллера** перейдите в папку с файлом и выполните команду от имени администратора. Если вы вошли как `root`, можно опустить `sudo`.
 
 ```sh
 sudo apt install ./wb-wear-light-gateway_0.2.0_all.deb

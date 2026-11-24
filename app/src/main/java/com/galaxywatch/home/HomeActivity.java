@@ -75,7 +75,7 @@ public final class HomeActivity extends Activity {
     private record Command(boolean target, View feedback) {}
 
     private final Map<Rooms.Light, Command> pending = new HashMap<>();
-    private final Map<Rooms.Light, Button> controls = new HashMap<>();
+    private final Map<Rooms.Light, CommandButton> controls = new HashMap<>();
 
     private SharedPreferences settings;
     private Rooms.Room room;
@@ -109,8 +109,9 @@ public final class HomeActivity extends Activity {
     private LinearLayout body;
     private TextView status;
     private TextView routeLabel;
-    private Button groupOff;
+    private CommandButton groupOff;
     private Command groupCommand;
+    private Map<Rooms.Light, Boolean> homeBeforeOff = Map.of();
     private ScrollView scroll;
     private int confirmScroll;
 
@@ -263,7 +264,7 @@ public final class HomeActivity extends Activity {
         addStatus();
         controls.clear();
         for (Rooms.Light light : selected.lights()) {
-            Button button = addButton(light.label(), () -> changeLight(light));
+            CommandButton button = addButton(light.label(), () -> changeLight(light));
             button.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
             button.setClipToOutline(true);
             button.setPaddingRelative(dp(10), dp(4), dp(10), dp(4));
@@ -826,7 +827,10 @@ public final class HomeActivity extends Activity {
                 Command command = pending.get(light);
                 if (!retained && value != null && command != null && value == command.target()) {
                     pending.remove(light);
-                    if (pending.isEmpty()) TileRead.commandsPending(false);
+                    if (pending.isEmpty()) {
+                        TileRead.commandsPending(false);
+                        notice = null;
+                    }
                     if (command != groupCommand) {
                         command.feedback().performHapticFeedback(HapticFeedbackConstants.CONFIRM);
                     }
@@ -875,7 +879,6 @@ public final class HomeActivity extends Activity {
             return;
         }
 
-        notice = null;
         Command command = new Command(next, controls.get(light));
         TileRead.commandsPending(true);
         pending.put(light, command);
@@ -904,6 +907,7 @@ public final class HomeActivity extends Activity {
         }
 
         TileRead.commandsPending(true);
+        homeBeforeOff = roomGrid == null ? Map.of() : new HashMap<>(states);
         groupCommand = new Command(false, groupOff);
         for (Rooms.Light light : lights()) {
             if (!Boolean.FALSE.equals(states.get(light))) {
@@ -962,18 +966,15 @@ public final class HomeActivity extends Activity {
         status.setTextColor(demo || connecting && notice == null ? MUTED : AMBER);
         status.setVisibility(text.isEmpty() ? View.GONE : View.VISIBLE);
 
-        for (Map.Entry<Rooms.Light, Button> control : controls.entrySet()) {
+        for (Map.Entry<Rooms.Light, CommandButton> control : controls.entrySet()) {
             Rooms.Light light = control.getKey();
-            Button button = control.getValue();
+            CommandButton button = control.getValue();
             Boolean value = states.get(light);
-            boolean waiting = pending.containsKey(light);
-            boolean lit = !waiting && Boolean.TRUE.equals(value);
+            boolean waiting = groupCommand == null && pending.containsKey(light);
+            boolean lit = Boolean.TRUE.equals(value);
             int icon;
             int state;
-            if (waiting) {
-                icon = R.drawable.ic_light_waiting;
-                state = R.string.light_state_pending;
-            } else if (value == null) {
+            if (value == null) {
                 icon = R.drawable.ic_light_unknown;
                 state = R.string.light_state_unknown;
             } else {
@@ -982,24 +983,17 @@ public final class HomeActivity extends Activity {
             }
             button.setEnabled(canChangeLight(light));
             CharSequence description = getText(state);
-            if (description.equals(button.getStateDescription())) continue;
+            button.commandState(waiting, description);
+            if (Integer.valueOf(state).equals(button.getTag())) continue;
+            button.setTag(state);
             button.setBackground(lightBackground(light.artwork(), lit));
             button.setTextColor(lit ? LIT_TEXT : TEXT);
             setLightIcon(button, icon, lit);
-            button.setStateDescription(description);
         }
-        if (roomGrid != null) {
-            Map<Rooms.Light, Boolean> confirmed = states;
-            if (!pending.isEmpty()) {
-                confirmed = new HashMap<>(states);
-                for (Rooms.Light light : pending.keySet()) confirmed.remove(light);
-            }
-            roomGrid.display(confirmed, onlyLit);
-        }
+        if (roomGrid != null) roomGrid.display(groupCommand == null ? states : homeBeforeOff, onlyLit);
         String offLabel = room == null ? "Погасить весь дом" : "Погасить здесь";
         boolean off = allOff();
         if (confirming) offLabel = "Выключить";
-        else if (groupCommand != null) offLabel = room == null ? "Выключаю свет…" : "Выключаю…";
         else if (off) offLabel = "Всё выключено";
         groupOff.setText(offLabel);
         boolean action = confirming || !off;
@@ -1013,7 +1007,8 @@ public final class HomeActivity extends Activity {
         groupOff.setTextColor(offColor);
         groupOff.setCompoundDrawableTintList(ColorStateList.valueOf(offColor));
         groupOff.setEnabled(canSwitchOff());
-        groupOff.setAlpha(groupOff.isEnabled() ? 1f : 0.68f);
+        groupOff.commandState(groupCommand != null, null);
+        groupOff.setAlpha(groupOff.isEnabled() || groupCommand != null ? 1f : 0.68f);
     }
 
     private TextView page(String title) {
@@ -1078,9 +1073,9 @@ public final class HomeActivity extends Activity {
         return header;
     }
 
-    private Button addEdgeAction(Runnable action) {
+    private CommandButton addEdgeAction(Runnable action) {
         body.addView(new View(this), new LinearLayout.LayoutParams(1, 0, 1));
-        Button button = addButton(room == null ? "Погасить весь дом" : "Погасить здесь", action);
+        CommandButton button = addButton(room == null ? "Погасить весь дом" : "Погасить здесь", action);
         button.setTextSize(14);
         button.setPadding(dp(15), dp(2), dp(15), dp(12));
         return button;
@@ -1105,16 +1100,16 @@ public final class HomeActivity extends Activity {
         return view;
     }
 
-    private Button addButton(String label, Runnable action) {
-        Button button = button(label, action);
+    private CommandButton addButton(String label, Runnable action) {
+        CommandButton button = button(label, action);
         LinearLayout.LayoutParams layout = new LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);
         layout.topMargin = dp(room == null ? 5 : 3);
         body.addView(button, layout);
         return button;
     }
 
-    private Button addButton(String label, Runnable action, int iconId) {
-        Button button = addButton(label, action);
+    private CommandButton addButton(String label, Runnable action, int iconId) {
+        CommandButton button = addButton(label, action);
         button.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
         setIcon(button, iconId, false);
         return button;
@@ -1152,8 +1147,8 @@ public final class HomeActivity extends Activity {
         if (lit) startLightAnimation(button);
     }
 
-    private Button button(String label, Runnable action) {
-        Button button = new Button(this);
+    private CommandButton button(String label, Runnable action) {
+        CommandButton button = new CommandButton(this);
         button.setText(label);
         button.setAllCaps(false);
         button.setTextColor(TEXT);

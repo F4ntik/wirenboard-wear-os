@@ -1,6 +1,6 @@
 # Как собрать пульт и запустить его на Galaxy Watch
 
-Здесь весь путь от исходников до первого запуска на Galaxy Watch 5 или 6. Основной пример — для Windows и PowerShell. Если нужен только готовый пульт, скачайте APK из выпуска и установите Android SDK Platform-Tools. Когда команда `adb version` заработает, переходите к разделу «Отладка на часах». Для первой проверки хватит демо. [Готовый APK](https://github.com/F4ntik/wirenboard-wear-os/releases/tag/v0.8.2) · [Скачать Platform-Tools](https://developer.android.com/tools/releases/platform-tools) · [Отладка на часах](#3-отладка-на-часах)
+Здесь весь путь от исходников до первого запуска на Galaxy Watch 5 или 6. Основной пример — для Windows и PowerShell. Если нужен только готовый пульт, скачайте APK из выпуска и установите Android SDK Platform-Tools. Когда команда `adb version` заработает, переходите к разделу «Отладка на часах». Для первой проверки хватит демо. [Готовый APK](https://github.com/F4ntik/wirenboard-wear-os/releases/tag/v0.8.3) · [Скачать Platform-Tools](https://developer.android.com/tools/releases/platform-tools) · [Отладка на часах](#3-отладка-на-часах)
 
 ## 1. Подготовьте компьютер
 

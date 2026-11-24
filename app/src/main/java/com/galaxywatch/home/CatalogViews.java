@@ -8,6 +8,7 @@ import android.graphics.Typeface;
 import android.graphics.drawable.Animatable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.InsetDrawable;
 import android.graphics.drawable.LayerDrawable;
 import android.graphics.drawable.RippleDrawable;
 import android.view.Gravity;
@@ -43,8 +44,8 @@ final class CatalogViews {
         return text;
     }
 
-    Button button(String label, Runnable action, int icon) {
-        Button button = new Button(context);
+    CommandButton button(String label, Runnable action, int icon) {
+        CommandButton button = new CommandButton(context);
         button.setText(label);
         button.setTextColor(TEXT);
         button.setAllCaps(false);
@@ -66,6 +67,12 @@ final class CatalogViews {
     void enabled(View view, boolean enabled) {
         view.setEnabled(enabled);
         view.setAlpha(enabled ? 1f : .62f);
+    }
+
+    void commandControl(CommandButton button, boolean available, boolean busy, boolean waiting) {
+        button.setEnabled(available && !busy);
+        button.setAlpha(available || waiting ? 1f : .62f);
+        button.commandState(waiting, null);
     }
 
     void edge(Button button, boolean allOff) {
@@ -180,7 +187,7 @@ final class CatalogViews {
         }
     }
 
-    final class LightButton extends Button {
+    final class LightButton extends CommandButton {
         private final int artwork;
         private int icon;
 
@@ -211,21 +218,25 @@ final class CatalogViews {
             setOnClickListener(view -> toggle.run());
         }
 
-        void display(Boolean power, boolean pending, boolean canToggle, boolean animate) {
+        void display(Boolean power, boolean pending, boolean available, boolean busy, boolean animate) {
             boolean lit = Boolean.TRUE.equals(power);
-            int next = pending ? R.drawable.ic_light_waiting : power == null ? R.drawable.ic_light_unknown
+            int next = power == null ? R.drawable.ic_light_unknown
                 : lit ? R.drawable.ic_light_on : R.drawable.ic_light;
             if (icon != next) {
                 animation(false);
                 icon = next;
-                setCompoundDrawablesRelative(drawable(next, lit ? 27 : 23, lit && !pending ? null : MUTED), null, null, null);
+                Drawable glyph = drawable(next, 27, lit ? null : MUTED);
+                if (!lit) {
+                    glyph = new InsetDrawable(glyph, dp(2));
+                    glyph.setBounds(0, 0, dp(27), dp(27));
+                }
+                setCompoundDrawablesRelative(glyph, null, null, null);
                 setBackground(pill(lit ? LIT : SURFACE, lit ? AMBER : 0, artwork));
                 setTextColor(lit ? LIT_TEXT : TEXT);
-                setStateDescription(pending ? "Ожидаем ответ" : power == null ? "Состояние неизвестно"
-                    : lit ? "Включено" : "Выключено");
             }
-            setEnabled(canToggle);
-            setAlpha(canToggle || pending || lit ? 1f : .62f);
+            commandState(pending, power == null ? "Состояние неизвестно" : lit ? "Включено" : "Выключено");
+            setEnabled(available && !busy);
+            setAlpha(available || pending || lit ? 1f : .62f);
             animation(animate);
         }
 
